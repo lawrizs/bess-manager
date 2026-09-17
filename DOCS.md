@@ -30,7 +30,7 @@ For detailed installation instructions, see the [Installation Guide](https://git
 
 1. Add this repository to Home Assistant:
    - Settings → Add-ons → Add-on Store → ⋮ → Repositories
-   - Add: `https://github.com/johanzander/bess-manager`
+   - Add: `https://github.com/lawrizs/bess-manager`
 
 2. Install BESS Manager from the add-on store
 
