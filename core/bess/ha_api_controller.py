@@ -483,10 +483,10 @@ class HomeAssistantAPIController:
     # lifetime_self_consumption      lifetime_self_consumption          — (growatt_server only)
     #
     # SOLAX-ONLY (VPP control — native SolaX inverters):
-    # solax_power_control_mode       —                                  solax_remotecontrol_power_control
-    # solax_active_power             —                                  solax_remotecontrol_active_power
+    # solax_power_control_mode       —                                  solax_remotecontrol_power_control_mode
+    # solax_active_power             —                                  solax_remotecontrol_push_mode_power_8_9
     # solax_autorepeat_duration      —                                  solax_remotecontrol_autorepeat_duration
-    # solax_power_control_trigger    —                                  solax_remotecontrol_trigger
+    # solax_power_control_trigger    —                                  solax_powercontrolmode8_trigger
     # solax_battery_min_soc          —                                  solax_battery_minimum_capacity_gridtied
     # solax_charger_use_mode         —                                  solax_charger_use_mode (SolaX native only)
     #
@@ -800,11 +800,18 @@ class HomeAssistantAPIController:
         "grid_export_total": "lifetime_export_to_grid",
         "total_yield": "lifetime_system_production",  # register 0x52, "Total Yield" (production)
         # No native register for lifetime_load_consumption
-        # VPP control
-        "remotecontrol_power_control": "solax_power_control_mode",
-        "remotecontrol_active_power": "solax_active_power",
+        # VPP control — mode 8 ("PV and BAT control - Duration"), not the
+        # mode 1 remotecontrol_* family. Mode 1's select is data-only: the
+        # integration recomputes a GRID setpoint from the target every
+        # autorepeat cycle (ap_target = target - pv_power under "Enabled
+        # Battery Control"), so what BESS asks for is a battery figure only
+        # by way of that translation. Mode 8 takes the battery power itself.
+        # The autorepeat duration entity is shared by modes 1-9; the trigger
+        # is not.
+        "remotecontrol_power_control_mode": "solax_power_control_mode",
+        "remotecontrol_push_mode_power_8_9": "solax_active_power",
         "remotecontrol_autorepeat_duration": "solax_autorepeat_duration",
-        "remotecontrol_trigger": "solax_power_control_trigger",
+        "powercontrolmode8_trigger": "solax_power_control_trigger",
         # Only the on-grid variant is mapped: BESS only operates grid-tied,
         # and "battery_minimum_capacity" (register 0x20, general/off-grid)
         # has no effect while grid-connected — see #270. Also fixes a
@@ -2425,7 +2432,8 @@ class HomeAssistantAPIController:
         triggers the command.
 
         Args:
-            watts: Target power in watts.  Positive = charge, negative = discharge.
+            watts: Target power in watts, at the battery.  Positive = charge,
+                negative = discharge.
         """
         mode_entity = self._get_entity_for_service("solax_power_control_mode")
         power_entity = self._get_entity_for_service("solax_active_power")
@@ -2439,9 +2447,12 @@ class HomeAssistantAPIController:
             "select_option",
             operation="SolaX VPP enable battery control",
             entity_id=mode_entity,
-            option="Enabled Power Control Mode",
+            option="Mode 8 - PV and BAT control - Duration",
         )
-        self._set_number_like(power_entity, watts, "SolaX VPP set active power")
+        # Mode 8 push power runs opposite to this method's contract: on the
+        # inverter, positive discharges the battery and negative charges it
+        # (plugin_solax.py, key="remotecontrol_push_mode_power_8_9").
+        self._set_number_like(power_entity, -watts, "SolaX VPP set active power")
         self._set_number_like(repeat_entity, 1200, "SolaX VPP set autorepeat duration")
         self._service_call_with_retry(
             "button",

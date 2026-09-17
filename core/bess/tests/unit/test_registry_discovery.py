@@ -248,14 +248,14 @@ def _solax_native_registry() -> list[dict]:
         _entity("sensor.solax_pv_power_1", "solax_modbus", "solax_pv_power_1"),
         _entity("sensor.solax_house_load", "solax_modbus", "solax_house_load"),
         _entity(
-            "select.solax_remotecontrol_power_control",
+            "select.solax_remotecontrol_power_control_mode",
             "solax_modbus",
-            "solax_remotecontrol_power_control",
+            "solax_remotecontrol_power_control_mode",
         ),
         _entity(
-            "number.solax_remotecontrol_active_power",
+            "number.solax_remotecontrol_push_mode_power_8_9",
             "solax_modbus",
-            "solax_remotecontrol_active_power",
+            "solax_remotecontrol_push_mode_power_8_9",
         ),
         _entity(
             "number.solax_remotecontrol_autorepeat_duration",
@@ -263,9 +263,16 @@ def _solax_native_registry() -> list[dict]:
             "solax_remotecontrol_autorepeat_duration",
         ),
         _entity(
-            "button.solax_remotecontrol_trigger",
+            "button.solax_powercontrolmode8_trigger",
             "solax_modbus",
-            "solax_remotecontrol_trigger",
+            "solax_powercontrolmode8_trigger",
+        ),
+        # Mode 1's select must NOT be picked up for solax_power_control_mode:
+        # its unique_id is a prefix of mode 8's, and it rejects mode 8's option.
+        _entity(
+            "select.solax_remotecontrol_power_control",
+            "solax_modbus",
+            "solax_remotecontrol_power_control",
         ),
         # Off-grid/general minimum capacity: real installs always have this
         # entity too, but it must NOT be matched — see #270.
@@ -1020,11 +1027,20 @@ class TestMapRegistryEntities:
         )
         assert result["battery_soc"] == "sensor.solax_battery_capacity"
         assert result["battery_charge_power"] == "sensor.solax_battery_power_charge"
+        # Mode 8, not mode 1: the two selects' unique_ids share a prefix, and
+        # only this one offers "Mode 8 - PV and BAT control - Duration".
         assert (
             result["solax_power_control_mode"]
-            == "select.solax_remotecontrol_power_control"
+            == "select.solax_remotecontrol_power_control_mode"
         )
-        assert result["solax_active_power"] == "number.solax_remotecontrol_active_power"
+        assert (
+            result["solax_active_power"]
+            == "number.solax_remotecontrol_push_mode_power_8_9"
+        )
+        assert (
+            result["solax_power_control_trigger"]
+            == "button.solax_powercontrolmode8_trigger"
+        )
         assert (
             result["solax_battery_min_soc"]
             == "number.solax_battery_minimum_capacity_gridtied"

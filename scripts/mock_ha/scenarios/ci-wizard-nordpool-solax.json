@@ -99,6 +99,29 @@
         "max": 6000
       }
     },
+    "select.solax_remotecontrol_power_control_mode": {
+      "state": "Disabled",
+      "attributes": {
+        "options": [
+          "Disabled",
+          "Mode 8 - PV and BAT control - Duration",
+          "Negative Injection Price",
+          "Negative Injection and Consumption Price",
+          "Export-First Battery Limit",
+          "Enabled Grid Control",
+          "Enabled No Discharge",
+          "Enabled Feedin Priority"
+        ]
+      }
+    },
+    "number.solax_remotecontrol_push_mode_power_8_9": {
+      "state": "0",
+      "attributes": {
+        "unit_of_measurement": "W",
+        "min": -30000,
+        "max": 30000
+      }
+    },
     "number.solax_remotecontrol_autorepeat_duration": {
       "state": "1200",
       "attributes": {
@@ -108,6 +131,10 @@
       }
     },
     "button.solax_remotecontrol_trigger": {
+      "state": "unknown",
+      "attributes": {}
+    },
+    "button.solax_powercontrolmode8_trigger": {
       "state": "unknown",
       "attributes": {}
     },
@@ -307,6 +334,24 @@
       "platform": "solax_modbus",
       "config_entry_id": "mock_solax_config_entry",
       "unique_id": "solax_remotecontrol_trigger"
+    },
+    {
+      "entity_id": "select.solax_remotecontrol_power_control_mode",
+      "platform": "solax_modbus",
+      "config_entry_id": "mock_solax_config_entry",
+      "unique_id": "solax_remotecontrol_power_control_mode"
+    },
+    {
+      "entity_id": "number.solax_remotecontrol_push_mode_power_8_9",
+      "platform": "solax_modbus",
+      "config_entry_id": "mock_solax_config_entry",
+      "unique_id": "solax_remotecontrol_push_mode_power_8_9"
+    },
+    {
+      "entity_id": "button.solax_powercontrolmode8_trigger",
+      "platform": "solax_modbus",
+      "config_entry_id": "mock_solax_config_entry",
+      "unique_id": "solax_powercontrolmode8_trigger"
     },
     {
       "entity_id": "number.solax_battery_minimum_capacity",

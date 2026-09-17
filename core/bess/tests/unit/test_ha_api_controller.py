@@ -1590,3 +1590,140 @@ class TestSolcastDetailedHourlyToQuarterly:
         )
 
         assert quarterly[36:40] == pytest.approx([0.3] * 4)
+
+
+# ── SolaX VPP (mode 8) ───────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def solax_ctrl():
+    """Controller wired to the solax_modbus mode 8 VPP entities."""
+    c = HomeAssistantAPIController(
+        ha_url="http://ha.local:8123",
+        token="test-token",
+        settings_store=_settings_store(
+            {
+                "solax_power_control_mode": "select.solax_remotecontrol_power_control_mode",
+                "solax_active_power": "number.solax_remotecontrol_push_mode_power_8_9",
+                "solax_autorepeat_duration": "number.solax_remotecontrol_autorepeat_duration",
+                "solax_power_control_trigger": "button.solax_powercontrolmode8_trigger",
+            }
+        ),
+        service_domain="solax_modbus",
+    )
+    c.max_attempts = 1
+    c.retry_base_delay = 0
+    c.failure_tracker = RuntimeFailureTracker()
+    return c
+
+
+def _posted_services(session_post):
+    """Extract (service_path, payload) for each HA service call made."""
+    calls = []
+    for call in session_post.call_args_list:
+        url = call.args[0] if call.args else call.kwargs["url"]
+        calls.append((url.split("/api/services/")[-1], call.kwargs["json"]))
+    return calls
+
+
+class TestSolaxVppActivePowerControl:
+    """The VPP command sequence written to solax_modbus.
+
+    These assert the command rather than a resulting SoE trajectory: the
+    inverter's response is not simulated anywhere in this codebase, so the
+    vendor mapping is the only observable. The sign assertions are the
+    substance -- an inverted push power silently charges when the optimizer
+    asked to discharge.
+    """
+
+    def test_charge_is_sent_to_the_inverter_as_a_negative_number(self, solax_ctrl):
+        """A charge request must reach mode 8 push power negated.
+
+        solax_modbus takes positive push power as DISCHARGE
+        (plugin_solax.py, key="remotecontrol_push_mode_power_8_9"), the
+        opposite of set_solax_active_power_control's contract.
+        """
+        solax_ctrl.session.post = _session_method_mock("post", _mock_response({}))
+
+        solax_ctrl.set_solax_active_power_control(2500)
+
+        power = [
+            payload
+            for path, payload in _posted_services(solax_ctrl.session.post)
+            if payload.get("entity_id")
+            == "number.solax_remotecontrol_push_mode_power_8_9"
+        ]
+        assert power and power[0]["value"] == -2500
+
+    def test_discharge_is_sent_to_the_inverter_as_a_positive_number(self, solax_ctrl):
+        solax_ctrl.session.post = _session_method_mock("post", _mock_response({}))
+
+        solax_ctrl.set_solax_active_power_control(-1800)
+
+        power = [
+            payload
+            for path, payload in _posted_services(solax_ctrl.session.post)
+            if payload.get("entity_id")
+            == "number.solax_remotecontrol_push_mode_power_8_9"
+        ]
+        assert power and power[0]["value"] == 1800
+
+    def test_selects_an_option_the_mode_8_entity_actually_offers(self, solax_ctrl):
+        """Pin the option string against solax_modbus's real option_dict.
+
+        Three releases shipped a string no SolaX select accepted, because
+        nothing here asserted it. These are the options
+        remotecontrol_power_control_mode publishes (plugin_solax.py).
+        """
+        mode_8_9_options = {
+            "Disabled",
+            "Mode 8 - PV and BAT control - Duration",
+            "Negative Injection Price",
+            "Negative Injection and Consumption Price",
+            "Export-First Battery Limit",
+            "Enabled Grid Control",
+            "Enabled No Discharge",
+            "Enabled Feedin Priority",
+        }
+        solax_ctrl.session.post = _session_method_mock("post", _mock_response({}))
+
+        solax_ctrl.set_solax_active_power_control(1000)
+
+        selected = [
+            payload["option"]
+            for path, payload in _posted_services(solax_ctrl.session.post)
+            if path == "select/select_option"
+        ]
+        assert selected == ["Mode 8 - PV and BAT control - Duration"]
+        assert selected[0] in mode_8_9_options
+
+    def test_disable_selects_an_option_the_mode_8_entity_offers(self, solax_ctrl):
+        solax_ctrl.session.post = _session_method_mock("post", _mock_response({}))
+
+        solax_ctrl.set_solax_vpp_disabled()
+
+        selected = [
+            payload["option"]
+            for path, payload in _posted_services(solax_ctrl.session.post)
+            if path == "select/select_option"
+        ]
+        assert selected == ["Disabled"]
+
+    def test_arms_autorepeat_and_fires_the_mode_8_trigger(self, solax_ctrl):
+        """The autorepeat window is the dead-man revert to self-use."""
+        solax_ctrl.session.post = _session_method_mock("post", _mock_response({}))
+
+        solax_ctrl.set_solax_active_power_control(1000)
+
+        calls = _posted_services(solax_ctrl.session.post)
+        assert (
+            "number/set_value",
+            {
+                "entity_id": "number.solax_remotecontrol_autorepeat_duration",
+                "value": 1200,
+            },
+        ) in calls
+        assert (
+            "button/press",
+            {"entity_id": "button.solax_powercontrolmode8_trigger"},
+        ) in calls

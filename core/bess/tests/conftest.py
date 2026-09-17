@@ -62,10 +62,10 @@ class MockHomeAssistantController(HomeAssistantAPIController):
         settings_store = SettingsStore()
         settings_store.data["sensors"] = {
             # SolaX VPP entity mappings (needed for entity resolution)
-            "solax_power_control_mode": "select.solax_remotecontrol_power_control",
-            "solax_active_power": "number.solax_remotecontrol_active_power",
+            "solax_power_control_mode": "select.solax_remotecontrol_power_control_mode",
+            "solax_active_power": "number.solax_remotecontrol_push_mode_power_8_9",
             "solax_autorepeat_duration": "number.solax_remotecontrol_autorepeat_duration",
-            "solax_power_control_trigger": "button.solax_remotecontrol_trigger",
+            "solax_power_control_trigger": "button.solax_powercontrolmode8_trigger",
             "solax_battery_min_soc": "number.solax_battery_minimum_capacity",
         }
         super().__init__(

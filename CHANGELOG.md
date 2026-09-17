@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Fixed
 
+- **SolaX VPP battery control now reaches the inverter** — BESS drives the mode 8 entities ("PV and BAT control - Duration") instead of the mode 1 remote-control select, which never accepted the mode string being sent, so every VPP period failed at the first service call. Battery power is negated on the way out, because solax_modbus's mode 8/9 push power reads positive as *discharge*.
 - **The battery's stored-energy cost basis no longer overstates the grid's share during deliberate grid charging** — during `GRID_CHARGING` periods the accounting now attributes concurrent solar to the battery first (matching the battery-first inverter topology), instead of assuming the home-first order that only holds for solar-surplus charging. ([#536](https://github.com/johanzander/bess-manager/issues/536))
 
 ## [11.0.0] - 2026-09-13

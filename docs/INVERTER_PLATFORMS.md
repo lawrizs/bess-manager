@@ -472,13 +472,20 @@ SolaX inverters have no persistent TOU schedule. BESS issues VPP (Virtual
 Power Plant) commands at each 15-minute period boundary. Commands auto-expire
 after 1200 seconds, providing a safe fallback to self-use mode.
 
-**Per-period control (VPP):**
+**Per-period control (VPP):** mode 8, the GEN4+ `write_multiple_registers`
+path, driven through solax_modbus's mode 8/9 entities:
 ```
-select.select_option(power_control_mode: "Enabled Power Control Mode")
-number.set_value(active_power: <watts>)       # positive=charge, negative=discharge
-number.set_value(autorepeat_duration: 1200)
-button.press(trigger)
+select.select_option(remotecontrol_power_control_mode: "Mode 8 - PV and BAT control - Duration")
+number.set_value(remotecontrol_push_mode_power_8_9: <-watts>)
+number.set_value(remotecontrol_autorepeat_duration: 1200)
+button.press(powercontrolmode8_trigger)
 ```
+
+The push power is **negated** on the way out: BESS states battery power as
+positive = charge, while solax_modbus's mode 8/9 push power is positive =
+discharge. Mode 8 takes that battery figure directly — unlike mode 1, whose
+data-only select has the integration recompute a *grid* setpoint each
+autorepeat cycle (`ap_target = target - pv_power`).
 
 **Idle/solar mode:** Disables VPP, inverter reverts to self-use.
 
