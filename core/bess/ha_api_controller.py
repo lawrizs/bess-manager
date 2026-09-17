@@ -2439,7 +2439,7 @@ class HomeAssistantAPIController:
             "select_option",
             operation="SolaX VPP enable battery control",
             entity_id=mode_entity,
-            option="Enabled Battery Control",
+            option="Enabled Power Control Mode",
         )
         self._set_number_like(power_entity, watts, "SolaX VPP set active power")
         self._set_number_like(repeat_entity, 1200, "SolaX VPP set autorepeat duration")

@@ -474,7 +474,7 @@ after 1200 seconds, providing a safe fallback to self-use mode.
 
 **Per-period control (VPP):**
 ```
-select.select_option(power_control_mode: "Enabled Battery Control")
+select.select_option(power_control_mode: "Enabled Power Control Mode")
 number.set_value(active_power: <watts>)       # positive=charge, negative=discharge
 number.set_value(autorepeat_duration: 1200)
 button.press(trigger)
