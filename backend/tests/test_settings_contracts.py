@@ -354,7 +354,11 @@ _BATTERY_OPTIONAL_FIELDS = frozenset(
 # store or written by the wizard. managed_load_sensors defaults to an empty
 # list and must stay absent-tolerant for every settings.json persisted before
 # issue #706 — requiring it at startup would break every existing install.
-_HOME_OPTIONAL_FIELDS = frozenset({"min_valid", "managed_load_sensors"})
+# grid_export_power_limit_kw defaults to 0 (no DSO export ceiling), so every
+# settings.json written before it existed stays valid.
+_HOME_OPTIONAL_FIELDS = frozenset(
+    {"min_valid", "managed_load_sensors", "grid_export_power_limit_kw"}
+)
 
 
 @pytest.mark.parametrize(

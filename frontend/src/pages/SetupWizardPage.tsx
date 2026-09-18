@@ -96,6 +96,7 @@ const SetupWizardPage: React.FC = () => {
     // Turned on in handleScan only once its required sensors are actually
     // detected on a new install -- see wizardNeededRef.
     powerMonitoringEnabled: false,
+    gridExportPowerLimitKw: 0,
     managedLoadSensors: [],
   });
 
@@ -313,6 +314,7 @@ const SetupWizardPage: React.FC = () => {
         safetyMarginFactor:     home.safetyMargin           ?? f.safetyMarginFactor,
         phaseCount:             home.phaseCount             ?? f.phaseCount,
         powerMonitoringEnabled: home.powerMonitoringEnabled ?? f.powerMonitoringEnabled,
+        gridExportPowerLimitKw: home.gridExportPowerLimitKw ?? f.gridExportPowerLimitKw,
         managedLoadSensors:     home.managedLoadSensors     ?? f.managedLoadSensors,
       }));
       setPricingForm(f => ({
@@ -399,6 +401,7 @@ const SetupWizardPage: React.FC = () => {
         safetyMarginFactor: homeForm.safetyMarginFactor,
         phaseCount: homeForm.phaseCount,
         powerMonitoringEnabled: homeForm.powerMonitoringEnabled,
+        gridExportPowerLimitKw: homeForm.gridExportPowerLimitKw,
         managedLoadSensors: homeForm.managedLoadSensors.filter(Boolean),
         // Electricity
         area: discovery.nordpoolArea || discovery.nordpoolCustomArea || pricingForm.area,

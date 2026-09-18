@@ -23,6 +23,7 @@ fixed so the comparison isolates planner changes.
 import json
 from pathlib import Path
 
+from core.bess.dp_battery_algorithm import _effective_export_cap_kwh
 from core.bess.simulation.vpp_simulator import simulate_vpp
 from core.bess.tests.helpers import _scenario_inputs, run_scenario
 
@@ -68,6 +69,7 @@ def simulate_plan(name: str, plan: dict) -> dict:
         inputs["initial_soe"],
         settings,
         dt,
+        export_cap_kwh=_effective_export_cap_kwh(inputs.get("home_settings"), dt),
     )
     return {
         "commands": [[c.power_pct, c.remote_control_enabled] for c in sim.commands],

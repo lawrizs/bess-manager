@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from core.bess.dp_battery_algorithm import (
     _build_period_data,
     _effective_ac_cap_kwh,
+    _period_ac_cap_kwh,
     _period_flows,
     _state_transition,
 )
@@ -174,6 +175,7 @@ def mode_to_power(
     soe: float,
     settings: BatterySettings,
     dt: float,
+    export_cap_kwh: float | None = None,
 ) -> float | None:
     """Battery power (kW; + charge, - discharge) the Growatt MIN inverter applies
     for one period under the given command and conditions. This is the v1 mode
@@ -194,7 +196,13 @@ def mode_to_power(
 
     # Battery discharge shares the inverter's AC stage with PV conversion —
     # mirrors the discharge feasibility filter in the DP.
-    ac_cap_kwh = _effective_ac_cap_kwh(settings, dt)
+    # The DSO export ceiling tightens the AC cap (`_period_ac_cap_kwh`), so
+    # the headroom below bounds battery-sourced export too. The plan is
+    # clamped the same way; without this, realized diverges from planned the
+    # moment the export cap binds.
+    ac_cap_kwh = _period_ac_cap_kwh(
+        _effective_ac_cap_kwh(settings, dt), home, export_cap_kwh
+    )
     if ac_cap_kwh is None:
         ac_headroom_kwh = float("inf")
     else:
@@ -250,6 +258,7 @@ def simulate(
     settings: BatterySettings,
     dt: float,
     currency: str = "SEK",
+    export_cap_kwh: float | None = None,
 ) -> SimulationResult:
     """Execute the command sequence period-by-period, carrying SoC forward, using
     the optimizer's own _state_transition + _build_period_data for accounting
@@ -258,7 +267,13 @@ def simulate(
     period_data = []
     for t, cmd in enumerate(commands):
         power = mode_to_power(
-            cmd, solar_production[t], home_consumption[t], soe, settings, dt
+            cmd,
+            solar_production[t],
+            home_consumption[t],
+            soe,
+            settings,
+            dt,
+            export_cap_kwh,
         )
         if power is None:
             # SOLAR_EXPORT-below-max (#313): battery held exactly unchanged,
@@ -283,6 +298,7 @@ def simulate(
             solar_production=solar_production[t],
             battery_settings=settings,
             dt=dt,
+            export_cap_kwh=export_cap_kwh,
         )
         pd = _build_period_data(
             flows=flows,

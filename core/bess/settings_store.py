@@ -515,6 +515,7 @@ class SettingsStore:
             DEFAULT_AREA,
             DEFAULT_CURRENCY,
             EXPORT_SPOT_MULTIPLIER,
+            GRID_EXPORT_POWER_LIMIT_KW,
             HOME_HOURLY_CONSUMPTION_KWH,
             HOUSE_MAX_FUSE_CURRENT_A,
             HOUSE_VOLTAGE_V,
@@ -544,6 +545,7 @@ class SettingsStore:
                 "safety_margin": SAFETY_MARGIN_FACTOR,
                 "phase_count": 1,
                 "power_monitoring_enabled": False,
+                "grid_export_power_limit_kw": GRID_EXPORT_POWER_LIMIT_KW,
             },
             "electricity_price": {
                 "markup_rate": MARKUP_RATE,
@@ -594,6 +596,7 @@ class SettingsStore:
             BATTERY_EFFICIENCY_CHARGE,
             BATTERY_EFFICIENCY_DISCHARGE,
             EXPORT_SPOT_MULTIPLIER,
+            GRID_EXPORT_POWER_LIMIT_KW,
             INVERTER_AC_POWER_MARGIN,
             INVERTER_MAX_AC_POWER_KW,
             SPOT_MULTIPLIER,
@@ -679,6 +682,15 @@ class SettingsStore:
                     home["safety_margin"],
                 )
                 changed = True
+
+            # Add missing fields with defaults
+            for key, default in (
+                ("grid_export_power_limit_kw", GRID_EXPORT_POWER_LIMIT_KW),
+            ):
+                if key not in home:
+                    home[key] = default
+                    logger.info("Schema migration: added home.%s = %s", key, default)
+                    changed = True
 
             if changed:
                 self.data["home"] = home

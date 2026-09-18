@@ -41,6 +41,13 @@ test.describe('Settings Page', () => {
 
     // Home settings fields
     await expect(page.getByText(/Consumption/i).first()).toBeVisible();
+
+    // The DSO feed-in ceiling lives outside Fuse Protection, so it is visible
+    // whether or not fuse monitoring is on.
+    await expect(page.getByText('Grid Export Limit')).toBeVisible();
+    await expect(
+      page.getByLabel(/Grid Export Power Limit/i),
+    ).toHaveValue('0');
   });
 
   test('consumption strategy "Home Assistant sensor" is blocked without its sensor', async ({ page }) => {

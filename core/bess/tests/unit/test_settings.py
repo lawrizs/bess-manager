@@ -115,6 +115,28 @@ def test_battery_settings_inverter_max_ac_power_defaults_off():
     assert settings.inverter_ac_power_margin == 0.1
 
 
+def test_home_settings_grid_export_power_limit_defaults_off() -> None:
+    """The export cap defaults to 0 (disabled) so existing installs are
+    unaffected, and it is settable independently of fuse monitoring."""
+    settings = HomeSettings()
+
+    assert settings.grid_export_power_limit_kw == 0.0
+
+    settings.update(grid_export_power_limit_kw=5.0)
+    assert settings.grid_export_power_limit_kw == 5.0
+
+
+def test_home_settings_grid_export_power_limit_validation() -> None:
+    """Negative is a configuration error, and it is rejected whether or not
+    power monitoring is on -- a feed-in ceiling is a property of the grid
+    connection, not of the fuse-protection feature."""
+    with pytest.raises(ValueError):
+        HomeSettings(grid_export_power_limit_kw=-1.0)
+
+    with pytest.raises(ValueError):
+        HomeSettings(grid_export_power_limit_kw=-1.0, power_monitoring_enabled=True)
+
+
 def test_battery_settings_inverter_max_ac_power_validation():
     with pytest.raises(ValueError):
         BatterySettings(inverter_max_ac_power_kw=-1.0)

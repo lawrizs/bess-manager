@@ -9,6 +9,9 @@ export interface HomeForm {
   safetyMarginFactor: number;
   phaseCount: number;
   powerMonitoringEnabled: boolean;
+  /** DSO feed-in ceiling in kW; 0 = unconstrained. Deliberately not part of
+   * fuse protection — it bounds export, not import. */
+  gridExportPowerLimitKw: number;
   /** Cumulative/lifetime energy sensors for loads (typically EV chargers)
    * to exclude from the ha_statistics baseline before it is computed —
    * see issue #706. Empty by default; only meaningful for that strategy. */
@@ -202,6 +205,20 @@ export function HomeFormSection({ form, onChange, sensors }: Props) {
               v => onChange({ ...form, safetyMarginFactor: v }), { min: 0, max: 2, step: 0.05 })}
           </div>
         )}
+      </SectionCard>
+
+      <SectionCard
+        title="Grid Export Limit"
+        description="The maximum power your grid operator allows you to feed in. Leave at 0 if your connection has no feed-in limit."
+      >
+        {numField('Grid Export Power Limit', form.gridExportPowerLimitKw,
+          v => onChange({ ...form, gridExportPowerLimitKw: v }), { unit: 'kW', min: 0, step: 0.1 })}
+        <p className="text-xs text-gray-500 dark:text-gray-400 pt-1">
+          The day-ahead scheduler plans within this limit: it never schedules export above it,
+          and solar surplus that can neither be exported nor stored is reported as clipped
+          rather than sold. Because energy that cannot leave is worth keeping, a limit here
+          makes charging from surplus solar more attractive.
+        </p>
       </SectionCard>
     </div>
   );

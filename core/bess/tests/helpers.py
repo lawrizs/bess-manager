@@ -11,6 +11,7 @@ Reduces boilerplate across test files by providing:
 from typing import Any
 
 from core.bess.dp_battery_algorithm import (
+    _effective_export_cap_kwh,
     _period_flows,
     optimize_battery_schedule,
 )
@@ -212,6 +213,7 @@ def run_scenario_realized(scenario: dict) -> tuple:
         inp["initial_soe"],
         settings,
         dt,
+        export_cap_kwh=_effective_export_cap_kwh(inp.get("home_settings"), dt),
     )
     return result, sim.realized_cost
 

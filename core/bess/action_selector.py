@@ -35,6 +35,7 @@ from core.bess.dp_battery_algorithm import (
     _ac_flows,
     _compute_reward,
     _effective_ac_cap_kwh,
+    _period_ac_cap_kwh,
     _soe_floor,
     _state_transition,
 )
@@ -123,6 +124,7 @@ def _solar_export_bypass_is_unexecutable(
     home_consumption: float,
     battery_settings: BatterySettings,
     dt: float,
+    export_cap_kwh: float | None = None,
 ) -> bool:
     """Is the SOLAR_EXPORT-below-max bypass (#313) one no inverter can carry
     out as commanded this period? (#630)
@@ -160,14 +162,21 @@ def _solar_export_bypass_is_unexecutable(
     gives: a cap passed in is a cap a caller can get wrong, and gating this
     candidate under a different cap than `_period_flows` prices it under is
     the reward-vs-flows divergence P4 exists to remove. One derivation per
-    period is not a cost worth reopening that seam for.
+    period is not a cost worth reopening that seam for. `export_cap_kwh` is
+    the exception the same argument produces: it comes from `HomeSettings`,
+    which this function does not receive, so it is passed and folded in --
+    exactly as `_period_flows` does with it.
     """
     _, grid_exported, _ = _ac_flows(
         solar_production,
         home_consumption,
         0.0,
         0.0,
-        _effective_ac_cap_kwh(battery_settings, dt),
+        _period_ac_cap_kwh(
+            _effective_ac_cap_kwh(battery_settings, dt),
+            home_consumption,
+            export_cap_kwh,
+        ),
     )
     return grid_exported <= FLOW_NOISE_FLOOR_KWH
 
@@ -565,6 +574,7 @@ class PeriodInputs:
     dt: float
     max_charge_power_per_period: list[float] | None = None
     import_cap_kwh: float | None = None
+    export_cap_kwh: float | None = None
     capabilities: PlatformCapabilities = DEFAULT_CAPABILITIES
     sell_price_floored: list[bool] | None = None
 
@@ -628,9 +638,15 @@ def select_action(
     )
     dt = period_inputs.dt
     import_cap_kwh = period_inputs.import_cap_kwh
+    export_cap_kwh = period_inputs.export_cap_kwh
     home = period_inputs.home_consumption[t]
     solar = period_inputs.solar_production[t]
-    ac_cap_kwh = _effective_ac_cap_kwh(battery_settings, dt)
+    # The DSO's export ceiling is carried as a tightening of the AC cap --
+    # see `_period_ac_cap_kwh`. Every clamp and clip downstream of this line
+    # then enforces it with no constraint of its own.
+    ac_cap_kwh = _period_ac_cap_kwh(
+        _effective_ac_cap_kwh(battery_settings, dt), home, export_cap_kwh
+    )
 
     # Candidates are gathered first, then filtered against the import cap
     # (#429), so the cap's "constrain, don't raise" floor -- the minimum
@@ -676,6 +692,7 @@ def select_action(
             sell_price=period_inputs.sell_price,
             cost_basis=cost_basis,
             import_cap_kwh=import_cap_kwh,
+            export_cap_kwh=export_cap_kwh,
         )
         candidates.append(
             Candidate(
@@ -700,7 +717,9 @@ def select_action(
     # candidate uses. Withheld where the classifier would call the period
     # IDLE rather than SOLAR_EXPORT, since nothing then commands the hold
     # (#630).
-    if not _solar_export_bypass_is_unexecutable(solar, home, battery_settings, dt):
+    if not _solar_export_bypass_is_unexecutable(
+        solar, home, battery_settings, dt, export_cap_kwh
+    ):
         consider(0.0, forced_next_soe=soe)
 
     # Discharge -- exact breakpoint enumeration (Finding 1/2/3/5).

@@ -71,6 +71,7 @@ SAFETY_MARGIN_FACTOR = 1.0  # Safety margin for power calculations (100%)
 # - 108% load: many hours before trip
 # - 128% load: 15min-2hrs before trip
 # - We monitor every 5min, so 100% is safe
+GRID_EXPORT_POWER_LIMIT_KW = 0.0  # DSO feed-in ceiling; 0 = unconstrained
 
 # Currency defaults
 DEFAULT_CURRENCY = "SEK"  # Default currency for price display (override in config.yaml)
@@ -234,6 +235,11 @@ class HomeSettings:
     currency: str = DEFAULT_CURRENCY
     consumption_strategy: str = "fixed"
     power_monitoring_enabled: bool = False
+    # DSO feed-in ceiling (kW), 0 = unconstrained. Deliberately independent of
+    # power_monitoring_enabled: that gate covers the fuse/current-sensor
+    # feature, while an export limit is a grid-connection fact that holds with
+    # or without live current monitoring.
+    grid_export_power_limit_kw: float = GRID_EXPORT_POWER_LIMIT_KW
     managed_load_sensors: list[str] = field(default_factory=list)
 
     def __post_init__(self):
@@ -241,6 +247,11 @@ class HomeSettings:
             1,
             3,
         ), f"phase_count must be 1 or 3, got {self.phase_count}"
+        if self.grid_export_power_limit_kw < 0:
+            raise ValueError(
+                f"grid_export_power_limit_kw must be >= 0 (0 disables the "
+                f"export cap), got {self.grid_export_power_limit_kw}"
+            )
         if self.power_monitoring_enabled:
             if self.max_fuse_current <= 0:
                 raise ValueError(
