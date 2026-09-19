@@ -10,11 +10,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 - **Grid Export Limit — tell BESS what your grid operator lets you feed in** — set the ceiling in kW under Settings → Home (0 = unlimited) and the day-ahead schedule plans within it: no period is ever scheduled to export above the limit, from solar or from the battery. Because energy that cannot leave the property is worth keeping, a limit also makes charging from surplus solar more attractive; whatever still cannot be exported or stored is reported as clipped solar rather than counted as export revenue. Planning only — nothing new is written to the inverter.
 - **Time-of-use grid fee** — for operators that bill distribution per kWh at a rate that changes through the day (e.g. ESO in Lithuania), rather than at one flat rate. Switch it on under Settings → Pricing and enter a final, VAT-inclusive rate for night, morning, day and evening; each period's buy price picks up the rate for the time it actually falls in, so the optimizer sees the resulting spread on top of the spot spread. The fee is added on top of Additional Costs (keep any genuinely flat component there), applies to import only, and is off by default, leaving existing installs unchanged.
+- **Peak-shaving: cap grid import during a configured window** — set a time window, weekdays and a max import power, and BESS suppresses grid-charging and discharges to cover load during that window, independent of spot price. Useful for capacity/demand tariffs. ([#96](https://github.com/johanzander/bess-manager/issues/96))
+
+### Removed
+
+- **Removed the unused `min_profit` price setting** — it was never read by the optimizer and only ever appeared as dead noise in settings/debug bundles. ([#773](https://github.com/johanzander/bess-manager/issues/773))
 
 ### Fixed
 
 - **SolaX VPP battery control now reaches the inverter** — BESS drives the mode 8 entities ("PV and BAT control - Duration") instead of the mode 1 remote-control select, which never accepted the mode string being sent, so every VPP period failed at the first service call. Battery power is negated on the way out, because solax_modbus's mode 8/9 push power reads positive as *discharge*.
 - **The battery's stored-energy cost basis no longer overstates the grid's share during deliberate grid charging** — during `GRID_CHARGING` periods the accounting now attributes concurrent solar to the battery first (matching the battery-first inverter topology), instead of assuming the home-first order that only holds for solar-surplus charging. ([#536](https://github.com/johanzander/bess-manager/issues/536))
+- **A battery charged slightly above `maxSoc` no longer bricks the whole day's optimization** — when the inverter reads a hair above the configured ceiling (e.g. charges to 93% with `maxSoc` 90%), `optimize_battery_schedule` raised `initial_soe exceeds capacity` and produced no schedule, so the battery sat idle — and, unable to discharge back into range, stayed over-max and re-failed every cycle (observed: 69 consecutive failures across a full day, a peak-price evening wasted). The over-max case now clamps to `max_soe` and warns, symmetric with the existing below-min handling, letting the optimizer discharge the battery back within range.
 
 ## [11.0.0] - 2026-09-13
 

@@ -443,7 +443,7 @@ def _pwl_best_action_at_continuous_state(
     cost_basis: float,
     max_charge_power_per_period: list[float] | None,
     capabilities: PlatformCapabilities = DEFAULT_CAPABILITIES,
-    import_cap_kwh: float | None = None,
+    import_cap_kwh: list[float | None] | None = None,
     export_cap_kwh: float | None = None,
     sell_price_floored: list[bool] | None = None,
 ) -> tuple[float, float, float, float, PeriodFlows]:
@@ -757,7 +757,7 @@ def run_pwl_window_backward_induction(
     end_soe_tolerance: float = 1e-6,
     max_charge_power_per_period: list[float] | None = None,
     capabilities: PlatformCapabilities = DEFAULT_CAPABILITIES,
-    import_cap_kwh: float | None = None,
+    import_cap_kwh: list[float | None] | None = None,
     export_cap_kwh: float | None = None,
 ) -> list[tuple[np.ndarray, np.ndarray]]:
     """Exact PWL backward induction over a short sub-horizon window whose end
@@ -838,8 +838,14 @@ def run_pwl_window_backward_induction(
             if max_charge_power_per_period is not None
             else None
         )
+        period_import_cap = import_cap_kwh[t] if import_cap_kwh is not None else None
 
-        def values_at(X: np.ndarray, _t: int = t, _pmc=period_max_charge) -> np.ndarray:
+        def values_at(
+            X: np.ndarray,
+            _t: int = t,
+            _pmc=period_max_charge,
+            _cap=period_import_cap,
+        ) -> np.ndarray:
             return _pwl_candidate_values_at(
                 X,
                 _t,
@@ -849,7 +855,7 @@ def run_pwl_window_backward_induction(
                 battery_settings,
                 dt,
                 _pmc,
-                import_cap_kwh,
+                _cap,
                 export_cap_kwh,
                 capabilities,
             )
@@ -967,7 +973,7 @@ def resolve_pwl_window(
     cost_basis: float,
     max_charge_power_per_period: list[float] | None = None,
     capabilities: PlatformCapabilities = DEFAULT_CAPABILITIES,
-    import_cap_kwh: float | None = None,
+    import_cap_kwh: list[float | None] | None = None,
     export_cap_kwh: float | None = None,
     sell_price_floored: list[bool] | None = None,
 ) -> list[tuple[float, float, PeriodFlows]]:
