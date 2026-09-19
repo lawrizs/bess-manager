@@ -100,6 +100,11 @@ def _valid_options() -> dict:
             "tax_reduction": 0.2,
             "spot_multiplier": 1.0175,
             "export_spot_multiplier": 1.018,
+            "grid_fee_enabled": False,
+            "grid_fee_night": 0.06292,
+            "grid_fee_morning": 0.08349,
+            "grid_fee_day": 0.10406,
+            "grid_fee_evening": 0.14641,
             "use_actual_price": False,
         },
     }

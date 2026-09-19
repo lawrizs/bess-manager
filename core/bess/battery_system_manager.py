@@ -221,6 +221,11 @@ class BatterySystemManager:
             area=self.price_settings.area,
             spot_multiplier=self.price_settings.spot_multiplier,
             export_spot_multiplier=self.price_settings.export_spot_multiplier,
+            grid_fee_enabled=self.price_settings.grid_fee_enabled,
+            grid_fee_night=self.price_settings.grid_fee_night,
+            grid_fee_morning=self.price_settings.grid_fee_morning,
+            grid_fee_day=self.price_settings.grid_fee_day,
+            grid_fee_evening=self.price_settings.grid_fee_evening,
         )
 
         # Initialize monitors (created in start() if controller available)
@@ -3977,6 +3982,17 @@ class BatterySystemManager:
                 )
                 self._price_manager.export_spot_multiplier = (
                     self.price_settings.export_spot_multiplier
+                )
+                self._price_manager.grid_fee_enabled = (
+                    self.price_settings.grid_fee_enabled
+                )
+                self._price_manager.grid_fee_night = self.price_settings.grid_fee_night
+                self._price_manager.grid_fee_morning = (
+                    self.price_settings.grid_fee_morning
+                )
+                self._price_manager.grid_fee_day = self.price_settings.grid_fee_day
+                self._price_manager.grid_fee_evening = (
+                    self.price_settings.grid_fee_evening
                 )
                 self._price_manager.clear_cache()
 

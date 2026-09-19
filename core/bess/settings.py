@@ -31,6 +31,19 @@ TAX_REDUCTION = (
 )
 SPOT_MULTIPLIER = 1.0  # multiplicative factor on spot (1.0 = no adjustment)
 EXPORT_SPOT_MULTIPLIER = 1.0  # multiplicative factor on spot for sell price
+
+# Time-of-use distribution fee (core/bess/grid_fee.py). Opt-in: when disabled
+# the buy price keeps the flat additional_costs model unchanged. The rates are
+# final (VAT-inclusive) per-kWh amounts added alongside additional_costs, not
+# instead of it — a flat energy tax and a time-varying grid fee can coexist.
+# Defaults are the Lithuanian ESO published rates in EUR/kWh, which is the
+# tariff structure the zone boundaries encode; any other operator must be
+# entered by hand.
+GRID_FEE_ENABLED = False
+GRID_FEE_NIGHT = 0.06292
+GRID_FEE_MORNING = 0.08349
+GRID_FEE_DAY = 0.10406
+GRID_FEE_EVENING = 0.14641
 MIN_PROFIT = 0.2  # Minimum profit per kWh to consider a charge/discharge cycle
 USE_ACTUAL_PRICE = False  # Use raw Nordpool spot prices or include markup, VAT, etc.
 
@@ -97,6 +110,11 @@ class PriceSettings:
     tax_reduction: float = TAX_REDUCTION
     spot_multiplier: float = SPOT_MULTIPLIER
     export_spot_multiplier: float = EXPORT_SPOT_MULTIPLIER
+    grid_fee_enabled: bool = GRID_FEE_ENABLED
+    grid_fee_night: float = GRID_FEE_NIGHT
+    grid_fee_morning: float = GRID_FEE_MORNING
+    grid_fee_day: float = GRID_FEE_DAY
+    grid_fee_evening: float = GRID_FEE_EVENING
     min_profit: float = MIN_PROFIT
     use_actual_price: bool = USE_ACTUAL_PRICE
 

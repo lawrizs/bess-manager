@@ -251,8 +251,12 @@ The sections below describe the key values you need to fill in.
 Nordpool prices are **VAT-exclusive** spot prices. The buy price is calculated as:
 
 ```
-buy_price = (spot_price + markup_rate) × vat_multiplier + additional_costs
+buy_price = (spot_price + markup_rate) × vat_multiplier + additional_costs + grid_fee
 ```
+
+`grid_fee` is the optional time-of-use distribution fee described below; it is zero
+unless `grid_fee_enabled` is set.
+
 
 Set `vat_multiplier` to your country's VAT rate and `additional_costs` to your fixed per-kWh
 charges (grid fee, energy tax, etc.) already including VAT:
@@ -277,7 +281,7 @@ electricity_price:
 **How the raw spot price is converted to your buy and sell prices:**
 
 ```
-Buy price  = (raw spot + markup) × VAT multiplier + additional costs
+Buy price  = (raw spot + markup) × VAT multiplier + additional costs + time-of-use grid fee
 Sell price = raw spot + tax reduction
 ```
 
@@ -309,6 +313,41 @@ Sell price = raw spot + tax reduction
 >
 > Your grid transfer fee and energy tax amounts vary by network operator and region.
 > Find these values on your electricity bill and recalculate as shown above.
+
+> **`grid_fee_enabled`** turns on the optional **time-of-use grid fee**, for operators
+> that bill distribution by time of day rather than at one flat rate — e.g. ESO in
+> Lithuania. The four rates (`grid_fee_night`, `grid_fee_morning`, `grid_fee_day`,
+> `grid_fee_evening`) are final per-kWh amounts **including VAT**, and are added *on top
+> of* `additional_costs`. Keep any genuinely flat component (e.g. an energy tax) in
+> `additional_costs` and set it to `0.0` if the whole grid fee is time-varying.
+>
+> Period boundaries are fixed and follow the published Lithuanian schedule, in your
+> Home Assistant local time:
+>
+> | Period | Mon–Fri | Sat/Sun |
+> |--------|---------|---------|
+> | Morning | 05:00–07:00 | — |
+> | Day | 07:00–17:00 | 07:00–22:00 |
+> | Evening | 17:00–22:00 | — |
+> | Night | 22:00–05:00 | 22:00–07:00 |
+>
+> Public holidays are billed on the weekend schedule by most operators, but are not
+> detected — on those days the morning and evening rates are still applied.
+>
+> **Example for Lithuania:**
+>
+> ```yaml
+> electricity_price:
+>   area: "LT"
+>   markup_rate: 0.0
+>   vat_multiplier: 1.21     # 21% VAT applied to spot + markup
+>   additional_costs: 0.0    # the whole grid fee is time-varying below
+>   grid_fee_enabled: true
+>   grid_fee_night: 0.06292
+>   grid_fee_morning: 0.08349
+>   grid_fee_day: 0.10406
+>   grid_fee_evening: 0.14641
+> ```
 
 > **`tax_reduction`** (labeled as "Export Compensation" in the UI) is the per-kWh payment you receive from the grid operator when selling energy back to the grid.
 > The Swedish *skattereduktion* (tax reduction) was removed Jan 1 2026. What remains is **Nätnytta** (grid export benefit).

@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### Added
 
 - **Grid Export Limit — tell BESS what your grid operator lets you feed in** — set the ceiling in kW under Settings → Home (0 = unlimited) and the day-ahead schedule plans within it: no period is ever scheduled to export above the limit, from solar or from the battery. Because energy that cannot leave the property is worth keeping, a limit also makes charging from surplus solar more attractive; whatever still cannot be exported or stored is reported as clipped solar rather than counted as export revenue. Planning only — nothing new is written to the inverter.
+- **Time-of-use grid fee** — for operators that bill distribution per kWh at a rate that changes through the day (e.g. ESO in Lithuania), rather than at one flat rate. Switch it on under Settings → Pricing and enter a final, VAT-inclusive rate for night, morning, day and evening; each period's buy price picks up the rate for the time it actually falls in, so the optimizer sees the resulting spread on top of the spot spread. The fee is added on top of Additional Costs (keep any genuinely flat component there), applies to import only, and is off by default, leaving existing installs unchanged.
 
 ### Fixed
 

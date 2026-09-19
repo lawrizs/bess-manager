@@ -817,10 +817,17 @@ doesn't match the schedule:
 
 The optimizer works with buy and sell prices derived from spot prices:
 
-    buy_price  = (spot + markup) * VAT_multiplier + additional_costs
+    buy_price  = (spot + markup) * VAT_multiplier + additional_costs + grid_fee
     sell_price = spot + export_compensation
 
-For Octopus Energy (UK), prices are already final — no markup/VAT applied.
+`grid_fee` is the optional time-of-use distribution fee (`core/bess/grid_fee.py`),
+zero unless `price.grid_fee_enabled` is set. It varies per period, so it is the
+one buy-price term that depends on *when* the period is, not just on the spot
+price — which is why `_calculate_buy_price` takes the period's wall clock. Its
+rates are entered VAT-inclusive and stack on top of `additional_costs`.
+
+For Octopus Energy (UK), prices are already final — no markup/VAT applied, and
+no grid fee either.
 
 For when a discharge is worthwhile, see **The Governing Economic Law** above —
 gross `sell_price` vs `cycle_cost` is *not* the test; marginal value vs the

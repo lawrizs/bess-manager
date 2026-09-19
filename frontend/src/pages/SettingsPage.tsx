@@ -59,6 +59,7 @@ const EMPTY_PRICING: PricingForm = {
   entsoeEntity: '',
   area: '', markupRate: 0, vatMultiplier: 1.25, additionalCosts: 0,
   taxReduction: 0, spotMultiplier: 1.0, exportSpotMultiplier: 1.0,
+  gridFeeEnabled: false, gridFeeNight: 0, gridFeeMorning: 0, gridFeeDay: 0, gridFeeEvening: 0,
 };
 const EMPTY_INVERTER: InverterForm = { inverterPlatform: 'growatt_server_min', deviceId: '', controlMode: 'tou' };
 
@@ -212,6 +213,11 @@ const SettingsPage: React.FC = () => {
         taxReduction: elec_s.taxReduction ?? 0,
         spotMultiplier: elec_s.spotMultiplier ?? 1.0,
         exportSpotMultiplier: elec_s.exportSpotMultiplier ?? 1.0,
+        gridFeeEnabled: elec_s.gridFeeEnabled ?? false,
+        gridFeeNight: elec_s.gridFeeNight ?? 0,
+        gridFeeMorning: elec_s.gridFeeMorning ?? 0,
+        gridFeeDay: elec_s.gridFeeDay ?? 0,
+        gridFeeEvening: elec_s.gridFeeEvening ?? 0,
       };
       setPricingForm(p);
       savedPricing.current = JSON.stringify(p);
@@ -428,6 +434,11 @@ const SettingsPage: React.FC = () => {
           taxReduction: pricingForm.taxReduction,
           spotMultiplier: pricingForm.spotMultiplier,
           exportSpotMultiplier: pricingForm.exportSpotMultiplier,
+          gridFeeEnabled: pricingForm.gridFeeEnabled,
+          gridFeeNight: pricingForm.gridFeeNight,
+          gridFeeMorning: pricingForm.gridFeeMorning,
+          gridFeeDay: pricingForm.gridFeeDay,
+          gridFeeEvening: pricingForm.gridFeeEvening,
           useActualPrice: false,
         },
         energyProvider: {
