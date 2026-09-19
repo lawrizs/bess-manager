@@ -16,6 +16,19 @@ from core.bess.price_manager import (
 )
 
 
+def _period_start(index: int, days: int = 0) -> datetime:
+    """Wall-clock start of quarterly period ``index`` on today + ``days``.
+
+    Mirrors the timestamps PriceManager.get_price_data() builds, so a direct
+    _calculate_buy_price() call in a test lands in the same time-of-use grid
+    fee zone as the value it is compared against.
+    """
+    base = datetime.combine(
+        time_utils.today() + timedelta(days=days), datetime.min.time()
+    )
+    return base + timedelta(minutes=15 * index)
+
+
 def test_direct_price_initialization() -> None:
     """Test initialization with direct prices."""
     mock_source = MockSource([1.0, 2.0, 3.0, 4.0])
@@ -436,10 +449,16 @@ def test_get_available_prices_today_and_tomorrow() -> None:
         assert len(sell) == 192
 
         # First 96 are today
-        assert all(b == pm._calculate_buy_price(0.5) for b in buy[:96])
+        assert all(
+            b == pm._calculate_buy_price(0.5, _period_start(index))
+            for index, b in enumerate(buy[:96])
+        )
 
         # Last 96 are tomorrow
-        assert all(b == pm._calculate_buy_price(0.6) for b in buy[96:])
+        assert all(
+            b == pm._calculate_buy_price(0.6, _period_start(index, days=1))
+            for index, b in enumerate(buy[96:])
+        )
 
 
 def test_get_available_prices_returns_full_arrays_from_midnight() -> None:
@@ -464,13 +483,13 @@ def test_get_available_prices_returns_full_arrays_from_midnight() -> None:
         buy, sell = pm.get_available_prices()
 
         # Index 0 should be first price (00:00 = period 0)
-        assert buy[0] == pm._calculate_buy_price(0.0)
+        assert buy[0] == pm._calculate_buy_price(0.0, _period_start(0))
         assert sell[0] == pm._calculate_sell_price(0.0)
 
         # Index 56 should be period 56 (14:00 = period 56)
         # Price for period 56 is 0.56
         period_56_price = 56 / 100.0
-        assert buy[56] == pm._calculate_buy_price(period_56_price)
+        assert buy[56] == pm._calculate_buy_price(period_56_price, _period_start(56))
         assert sell[56] == pm._calculate_sell_price(period_56_price)
 
         # Each quarter has its own price (no repetition)

@@ -95,6 +95,11 @@ PRICE_REQUIRED_FIELDS: frozenset[str] = frozenset(
         "tax_reduction",
         "spot_multiplier",
         "export_spot_multiplier",
+        "grid_fee_enabled",
+        "grid_fee_night",
+        "grid_fee_morning",
+        "grid_fee_day",
+        "grid_fee_evening",
     }
 )
 

@@ -117,6 +117,11 @@ const SetupWizardPage: React.FC = () => {
     taxReduction: 0.2,
     spotMultiplier: 1.0,
     exportSpotMultiplier: 1.0,
+    gridFeeEnabled: false,
+    gridFeeNight: 0,
+    gridFeeMorning: 0,
+    gridFeeDay: 0,
+    gridFeeEvening: 0,
   });
 
   const handleScan = useCallback(async () => {
@@ -329,6 +334,11 @@ const SetupWizardPage: React.FC = () => {
         taxReduction:          elec.taxReduction                    ?? f.taxReduction,
         spotMultiplier:        elec.spotMultiplier                  ?? f.spotMultiplier,
         exportSpotMultiplier:  elec.exportSpotMultiplier            ?? f.exportSpotMultiplier,
+        gridFeeEnabled:        elec.gridFeeEnabled                  ?? f.gridFeeEnabled,
+        gridFeeNight:          elec.gridFeeNight                    ?? f.gridFeeNight,
+        gridFeeMorning:        elec.gridFeeMorning                  ?? f.gridFeeMorning,
+        gridFeeDay:            elec.gridFeeDay                      ?? f.gridFeeDay,
+        gridFeeEvening:        elec.gridFeeEvening                  ?? f.gridFeeEvening,
         // Restore saved config entry IDs so manual entries survive a wizard re-run
         nordpoolConfigEntryId: ep.nordpoolOfficial?.configEntryId ?? f.nordpoolConfigEntryId,
         nordpoolEntity:        ep.nordpoolHacs?.entity           ?? f.nordpoolEntity,
@@ -412,6 +422,11 @@ const SetupWizardPage: React.FC = () => {
         taxReduction: pricingForm.taxReduction,
         spotMultiplier: pricingForm.spotMultiplier,
         exportSpotMultiplier: pricingForm.exportSpotMultiplier,
+        gridFeeEnabled: pricingForm.gridFeeEnabled,
+        gridFeeNight: pricingForm.gridFeeNight,
+        gridFeeMorning: pricingForm.gridFeeMorning,
+        gridFeeDay: pricingForm.gridFeeDay,
+        gridFeeEvening: pricingForm.gridFeeEvening,
         // Nordpool HACS entity
         nordpoolEntity: pricingForm.nordpoolEntity || undefined,
         // Octopus Energy entity IDs

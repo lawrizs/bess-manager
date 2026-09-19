@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, ClassVar
 from zoneinfo import ZoneInfo
 
-from . import time_utils
+from . import grid_fee, time_utils
 from .exceptions import PriceDataUnavailableError, SystemConfigurationError
 
 logger = logging.getLogger(__name__)
@@ -430,6 +430,11 @@ class PriceManager:
         area: str,
         spot_multiplier: float = 1.0,
         export_spot_multiplier: float = 1.0,
+        grid_fee_enabled: bool = False,
+        grid_fee_night: float = 0.0,
+        grid_fee_morning: float = 0.0,
+        grid_fee_day: float = 0.0,
+        grid_fee_evening: float = 0.0,
     ) -> None:
         """Initialize the price manager.
 
@@ -442,6 +447,11 @@ class PriceManager:
             area: Price area code (e.g. "SE4", "NO1", "DK1")
             spot_multiplier: Multiplicative factor on spot buy price (1.0 = no adjustment)
             export_spot_multiplier: Multiplicative factor on spot sell price
+            grid_fee_enabled: Whether the time-of-use distribution fee applies
+            grid_fee_night: Final per-kWh fee in the night zone
+            grid_fee_morning: Final per-kWh fee in the morning zone
+            grid_fee_day: Final per-kWh fee in the day zone
+            grid_fee_evening: Final per-kWh fee in the evening zone
         """
         self.price_source = price_source
         self.markup_rate = markup_rate
@@ -451,6 +461,11 @@ class PriceManager:
         self.area = area
         self.spot_multiplier = spot_multiplier
         self.export_spot_multiplier = export_spot_multiplier
+        self.grid_fee_enabled = grid_fee_enabled
+        self.grid_fee_night = grid_fee_night
+        self.grid_fee_morning = grid_fee_morning
+        self.grid_fee_day = grid_fee_day
+        self.grid_fee_evening = grid_fee_evening
         self._logger = logging.getLogger(__name__)
 
         # Cache for today's prices
@@ -472,11 +487,34 @@ class PriceManager:
         self._tomorrow_prices = None
         self._tomorrow_date = None
 
-    def _calculate_buy_price(self, base_price: float) -> float:
+    def grid_fee_for(self, moment: datetime) -> float:
+        """Time-of-use distribution fee for a period starting at ``moment``.
+
+        Args:
+            moment: Start of the pricing period, in local wall-clock time.
+
+        Returns:
+            Final (VAT-inclusive) per-kWh fee, or 0.0 when the time-of-use
+            fee is disabled.
+        """
+        if not self.grid_fee_enabled:
+            return 0.0
+
+        zone = grid_fee.zone_for(moment)
+        return {
+            grid_fee.ZONE_NIGHT: self.grid_fee_night,
+            grid_fee.ZONE_MORNING: self.grid_fee_morning,
+            grid_fee.ZONE_DAY: self.grid_fee_day,
+            grid_fee.ZONE_EVENING: self.grid_fee_evening,
+        }[zone]
+
+    def _calculate_buy_price(self, base_price: float, moment: datetime) -> float:
         """Calculate retail buy price from Nordpool base price.
 
         Args:
             base_price: Raw Nordpool price (VAT-exclusive)
+            moment: Start of the pricing period, in local wall-clock time —
+                the time-of-use distribution fee varies across the day.
 
         Returns:
             Calculated retail price
@@ -484,7 +522,7 @@ class PriceManager:
         result = (
             base_price * self.spot_multiplier + self.markup_rate
         ) * self.vat_multiplier
-        return result + self.additional_costs
+        return result + self.additional_costs + self.grid_fee_for(moment)
 
     def _calculate_sell_price(self, base_price: float) -> float:
         """Calculate sell-back price from Nordpool base price.
@@ -547,7 +585,7 @@ class PriceManager:
                 buy_price = (
                     price
                     if self.price_source.prices_are_final
-                    else self._calculate_buy_price(price)
+                    else self._calculate_buy_price(price, timestamp)
                 )
 
                 price_entry = {
@@ -681,8 +719,21 @@ class PriceManager:
             List of buy prices
         """
         if raw_prices is not None:
-            # Calculate buy prices directly from the provided raw prices
-            return [self._calculate_buy_price(price) for price in raw_prices]
+            # Calculate buy prices directly from the provided raw prices.
+            # Raw prices carry no timestamps of their own, so they are read as
+            # a full day starting at target_date 00:00 — the same period
+            # layout get_price_data() builds, which the time-of-use grid fee
+            # needs to place each period in its tariff zone.
+            base_timestamp = datetime.combine(
+                target_date or time_utils.today(), datetime.min.time()
+            )
+            period_hours = self.price_source.period_duration_hours
+            return [
+                self._calculate_buy_price(
+                    price, base_timestamp + timedelta(hours=index * period_hours)
+                )
+                for index, price in enumerate(raw_prices)
+            ]
         else:
             # Get buy prices from the price data for the specified date
             price_data = self.get_price_data(target_date)

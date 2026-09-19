@@ -90,6 +90,29 @@ class TestUpdateSettings:
         assert system._price_manager.spot_multiplier == 1.0175
         assert system._price_manager.export_spot_multiplier == 1.018
 
+    def test_grid_fee_settings_synced_to_price_manager(
+        self, system: BatterySystemManager
+    ) -> None:
+        """A settings edit must reach the object that prices periods, or the
+        new rates only take effect after a restart."""
+        system.update_settings(
+            {
+                "price": {
+                    "grid_fee_enabled": True,
+                    "grid_fee_night": 0.06292,
+                    "grid_fee_morning": 0.08349,
+                    "grid_fee_day": 0.10406,
+                    "grid_fee_evening": 0.14641,
+                }
+            }
+        )
+        assert system.price_settings.grid_fee_enabled is True
+        assert system._price_manager.grid_fee_enabled is True
+        assert system._price_manager.grid_fee_night == 0.06292
+        assert system._price_manager.grid_fee_morning == 0.08349
+        assert system._price_manager.grid_fee_day == 0.10406
+        assert system._price_manager.grid_fee_evening == 0.14641
+
     def test_invalid_settings_raises_system_configuration_error(self, system):
         with pytest.raises(SystemConfigurationError):
             system.update_settings({"battery": {"capacity": "not_a_number"}})

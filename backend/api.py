@@ -3225,6 +3225,11 @@ async def setup_complete(payload: APISetupCompletePayload):
             "taxReduction": "tax_reduction",
             "spotMultiplier": "spot_multiplier",
             "exportSpotMultiplier": "export_spot_multiplier",
+            "gridFeeEnabled": "grid_fee_enabled",
+            "gridFeeNight": "grid_fee_night",
+            "gridFeeMorning": "grid_fee_morning",
+            "gridFeeDay": "grid_fee_day",
+            "gridFeeEvening": "grid_fee_evening",
         }
         area = payload.area or payload.nordpoolArea
         if any(getattr(payload, f) is not None for f in _PRICE_MAP) or area:
@@ -3368,6 +3373,11 @@ async def setup_complete(payload: APISetupCompletePayload):
                     "tax_reduction": payload.taxReduction,
                     "spot_multiplier": payload.spotMultiplier,
                     "export_spot_multiplier": payload.exportSpotMultiplier,
+                    "grid_fee_enabled": payload.gridFeeEnabled,
+                    "grid_fee_night": payload.gridFeeNight,
+                    "grid_fee_morning": payload.gridFeeMorning,
+                    "grid_fee_day": payload.gridFeeDay,
+                    "grid_fee_evening": payload.gridFeeEvening,
                 }
             )
         if live_updates:

@@ -1,5 +1,5 @@
 import React from 'react';
-import { numField, txtInput, radioGroup, SectionCard } from './FormHelpers';
+import { numField, txtInput, radioGroup, toggle, SectionCard } from './FormHelpers';
 
 export interface PricingForm {
   currency: string;
@@ -18,6 +18,11 @@ export interface PricingForm {
   taxReduction: number;
   spotMultiplier: number;
   exportSpotMultiplier: number;
+  gridFeeEnabled: boolean;
+  gridFeeNight: number;
+  gridFeeMorning: number;
+  gridFeeDay: number;
+  gridFeeEvening: number;
 }
 
 interface Props {
@@ -33,10 +38,16 @@ export function PricingFormSection({ form, onChange }: Props) {
   const sm = form.spotMultiplier ?? 1.0;
   const esm = form.exportSpotMultiplier ?? 1.0;
   const previewSpot = 1.0;
-  const previewBuy = Number(
-    ((previewSpot * sm + form.markupRate) * form.vatMultiplier + form.additionalCosts).toFixed(4),
-  );
+  const previewBase = (previewSpot * sm + form.markupRate) * form.vatMultiplier + form.additionalCosts;
+  const previewBuy = Number(previewBase.toFixed(4));
   const previewSell = Number((previewSpot * esm + form.taxReduction).toFixed(4));
+
+  const gridFeeZones: Array<{ key: keyof PricingForm; label: string; hours: string }> = [
+    { key: 'gridFeeNight', label: 'Night', hours: 'Mon–Fri 22:00–05:00 · Sat/Sun 22:00–07:00' },
+    { key: 'gridFeeMorning', label: 'Morning', hours: 'Mon–Fri 05:00–07:00' },
+    { key: 'gridFeeDay', label: 'Day', hours: 'Mon–Fri 07:00–17:00 · Sat/Sun 07:00–22:00' },
+    { key: 'gridFeeEvening', label: 'Evening', hours: 'Mon–Fri 17:00–22:00' },
+  ];
 
   return (
     <div className="space-y-3">
@@ -169,16 +180,55 @@ export function PricingFormSection({ form, onChange }: Props) {
                 </div>
               </div>
             )}
+            <div className="rounded-lg border border-gray-200 dark:border-gray-700 px-4 py-3 space-y-3">
+              {toggle('Time-of-use grid fee', form.gridFeeEnabled,
+                v => onChange({ ...form, gridFeeEnabled: v }))}
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                For operators that bill distribution by time of day (e.g. ESO in Lithuania).
+                The rate for each period is added on top of Additional Costs, so enter it as a
+                final per-kWh amount including VAT. Times are your Home Assistant local time.
+              </p>
+              {form.gridFeeEnabled && (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {gridFeeZones.map(zone => (
+                      <div key={zone.key}>
+                        {numField(`${zone.label} Rate`, form[zone.key] as number,
+                          v => onChange({ ...form, [zone.key]: v }),
+                          { unit: `${currency}/kWh (incl. VAT)`, min: 0, step: 0.00001 })}
+                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{zone.hours}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 italic">
+                    Public holidays are billed on the weekend schedule by most operators, but are
+                    not detected here — on those days the morning and evening rates are still
+                    applied.
+                  </p>
+                </div>
+              )}
+            </div>
             <div className="rounded-lg bg-gray-50 dark:bg-gray-700/50 px-4 py-3 text-sm space-y-1.5">
               <p className="text-xs text-gray-500 dark:text-gray-400">
                 Preview at spot = 1.00
               </p>
-              <div className="flex justify-between font-medium">
-                <span className="text-gray-700 dark:text-gray-200">Buy price</span>
-                <span className="text-blue-600 dark:text-blue-400">
-                  {previewBuy.toFixed(2)} {currency}/kWh
-                </span>
-              </div>
+              {form.gridFeeEnabled ? (
+                gridFeeZones.map(zone => (
+                  <div key={zone.key} className="flex justify-between font-medium">
+                    <span className="text-gray-700 dark:text-gray-200">Buy price · {zone.label}</span>
+                    <span className="text-blue-600 dark:text-blue-400">
+                      {(previewBase + (form[zone.key] as number)).toFixed(2)} {currency}/kWh
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <div className="flex justify-between font-medium">
+                  <span className="text-gray-700 dark:text-gray-200">Buy price</span>
+                  <span className="text-blue-600 dark:text-blue-400">
+                    {previewBuy.toFixed(2)} {currency}/kWh
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between font-medium">
                 <span className="text-gray-700 dark:text-gray-200">Sell price</span>
                 <span className="text-green-600 dark:text-green-400">

@@ -149,6 +149,14 @@ export interface ElectricitySettings {
   additionalCosts: number;
   taxReduction: number;
   area: string;
+  // Time-of-use distribution fee, added on top of additionalCosts. Rates are
+  // final (VAT-inclusive) per-kWh amounts; zone boundaries are fixed and
+  // documented in core/bess/grid_fee.py.
+  gridFeeEnabled: boolean;
+  gridFeeNight: number;
+  gridFeeMorning: number;
+  gridFeeDay: number;
+  gridFeeEvening: number;
 }
 
 export interface ScheduleData {

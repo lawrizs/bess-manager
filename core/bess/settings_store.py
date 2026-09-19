@@ -516,6 +516,11 @@ class SettingsStore:
             DEFAULT_CURRENCY,
             EXPORT_SPOT_MULTIPLIER,
             GRID_EXPORT_POWER_LIMIT_KW,
+            GRID_FEE_DAY,
+            GRID_FEE_ENABLED,
+            GRID_FEE_EVENING,
+            GRID_FEE_MORNING,
+            GRID_FEE_NIGHT,
             HOME_HOURLY_CONSUMPTION_KWH,
             HOUSE_MAX_FUSE_CURRENT_A,
             HOUSE_VOLTAGE_V,
@@ -555,6 +560,11 @@ class SettingsStore:
                 "area": DEFAULT_AREA,
                 "spot_multiplier": SPOT_MULTIPLIER,
                 "export_spot_multiplier": EXPORT_SPOT_MULTIPLIER,
+                "grid_fee_enabled": GRID_FEE_ENABLED,
+                "grid_fee_night": GRID_FEE_NIGHT,
+                "grid_fee_morning": GRID_FEE_MORNING,
+                "grid_fee_day": GRID_FEE_DAY,
+                "grid_fee_evening": GRID_FEE_EVENING,
                 "use_actual_price": USE_ACTUAL_PRICE,
             },
             "energy_provider": {
@@ -597,6 +607,11 @@ class SettingsStore:
             BATTERY_EFFICIENCY_DISCHARGE,
             EXPORT_SPOT_MULTIPLIER,
             GRID_EXPORT_POWER_LIMIT_KW,
+            GRID_FEE_DAY,
+            GRID_FEE_ENABLED,
+            GRID_FEE_EVENING,
+            GRID_FEE_MORNING,
+            GRID_FEE_NIGHT,
             INVERTER_AC_POWER_MARGIN,
             INVERTER_MAX_AC_POWER_KW,
             SPOT_MULTIPLIER,
@@ -695,16 +710,21 @@ class SettingsStore:
             if changed:
                 self.data["home"] = home
 
-        # --- electricity_price: spot_multiplier / export_spot_multiplier / use_actual_price ---
-        # Added after these fields were introduced on PriceSettings; without a
-        # default, build_system_settings() would raise ValueError at startup
-        # for any config written before this migration existed.
+        # --- electricity_price: fields added after the section was first written ---
+        # Added as each was introduced on PriceSettings; without a default,
+        # build_system_settings() would raise ValueError at startup for any
+        # config written before the corresponding migration existed.
         price = self.data.get("electricity_price")
         if isinstance(price, dict):
             for key, default in (
                 ("spot_multiplier", SPOT_MULTIPLIER),
                 ("export_spot_multiplier", EXPORT_SPOT_MULTIPLIER),
                 ("use_actual_price", USE_ACTUAL_PRICE),
+                ("grid_fee_enabled", GRID_FEE_ENABLED),
+                ("grid_fee_night", GRID_FEE_NIGHT),
+                ("grid_fee_morning", GRID_FEE_MORNING),
+                ("grid_fee_day", GRID_FEE_DAY),
+                ("grid_fee_evening", GRID_FEE_EVENING),
             ):
                 if key not in price:
                     price[key] = default
