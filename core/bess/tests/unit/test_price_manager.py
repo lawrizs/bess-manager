@@ -77,6 +77,31 @@ def test_spot_multiplier_applied_to_buy_price() -> None:
     assert pm.sell_prices[0] == expected_sell_price
 
 
+def test_zero_export_multiplier_gives_a_fixed_sell_price() -> None:
+    """A flat contractual export rate is expressed by zeroing the spot term, so
+    tax_reduction alone is the sell price -- e.g. Lithuania's 0.0726 EUR/kWh.
+    This is the supported way to configure a fixed sell price; the UI exposes
+    both fields for every provider precisely so it can be set."""
+    varying_spot = [i / 10.0 for i in range(96)]
+    pm = PriceManager(
+        price_source=MockSource(varying_spot),
+        markup_rate=0.0,
+        vat_multiplier=1.21,
+        additional_costs=0.0,
+        tax_reduction=0.0726,
+        area="LT",
+        export_spot_multiplier=0.0,
+    )
+
+    sell_prices = pm.get_sell_prices(target_date=time_utils.today())
+    assert set(sell_prices) == {0.0726}
+
+    # Import pricing must still track spot -- zeroing the *export* multiplier
+    # is not allowed to flatten the buy side too.
+    buy_prices = pm.get_buy_prices(target_date=time_utils.today())
+    assert buy_prices[0] != buy_prices[50]
+
+
 def test_spot_multiplier_defaults_to_no_adjustment() -> None:
     """Omitting spot_multiplier/export_spot_multiplier must reproduce the additive-only formula."""
     mock_source = MockSource([1.0])

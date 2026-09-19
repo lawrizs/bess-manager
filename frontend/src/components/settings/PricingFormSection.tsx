@@ -128,9 +128,9 @@ export function PricingFormSection({ form, onChange }: Props) {
         {!isOctopus && (
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {isEntsoe && numField('Import Spot Multiplier', form.spotMultiplier,
+              {numField('Import Spot Multiplier', form.spotMultiplier,
                 v => onChange({ ...form, spotMultiplier: v }),
-                { unit: 'factor (1.0 = no adjustment)', min: 0.5, max: 2.0, step: 0.0001 })}
+                { unit: 'factor (1.0 = no adjustment)', min: 0, max: 2.0, step: 0.0001 })}
               {numField('Markup Rate', form.markupRate,
                 v => onChange({ ...form, markupRate: v }),
                 { unit: `${currency}/kWh (ex-VAT)`, min: 0, step: 0.001 })}
@@ -140,9 +140,9 @@ export function PricingFormSection({ form, onChange }: Props) {
               {numField('Additional Costs', form.additionalCosts,
                 v => onChange({ ...form, additionalCosts: v }),
                 { unit: `${currency}/kWh`, min: 0, step: 0.001 })}
-              {isEntsoe && numField('Export Spot Multiplier', form.exportSpotMultiplier,
+              {numField('Export Spot Multiplier', form.exportSpotMultiplier,
                 v => onChange({ ...form, exportSpotMultiplier: v }),
-                { unit: 'factor (1.0 = no adjustment)', min: 0.5, max: 2.0, step: 0.0001 })}
+                { unit: 'factor (0 = fixed sell price)', min: 0, max: 2.0, step: 0.0001 })}
               {numField('Export Compensation', form.taxReduction,
                 v => onChange({ ...form, taxReduction: v }),
                 { unit: `${currency}/kWh`, step: 0.001 })}
@@ -166,16 +166,18 @@ export function PricingFormSection({ form, onChange }: Props) {
             ) : (
               <div className="rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800/40 px-4 py-3 space-y-3 text-xs text-gray-600 dark:text-gray-400">
                 <div className="space-y-2">
+                  <div><span className="font-medium text-blue-900 dark:text-blue-200">Import Spot Multiplier:</span> Contract-specific factor on the raw spot price. Leave at 1.0 unless your contract scales spot.</div>
                   <div><span className="font-medium text-blue-900 dark:text-blue-200">Markup Rate:</span> Energy provider margin fee. E.g. Tibber 0.08 (8 öre/kWh), Ellevio ~0.15. Applied before VAT.</div>
                   <div><span className="font-medium text-blue-900 dark:text-blue-200">VAT Multiplier:</span> VAT factor. 1.25 = 25% (Sweden/Norway), 1.20 = 20% (UK/EU).</div>
                   <div><span className="font-medium text-blue-900 dark:text-blue-200">Additional Costs:</span> Grid transfer fee + energy tax (sum ex-VAT, then VAT applied). E.g. E.ON: (0.2584 + 0.3600) × 1.25 = 0.773 SEK/kWh.</div>
-                  <div><span className="font-medium text-blue-900 dark:text-blue-200">Export Compensation:</span> Per-kWh payment from grid operator (Nätnytta) when selling surplus electricity. Check your energy bill under "Producent/Självfaktura". E.g. E.ON: 0.1988 (19.88 öre/kWh).</div>
+                  <div><span className="font-medium text-blue-900 dark:text-blue-200">Export Spot Multiplier:</span> Factor on spot for exported energy. <strong>Set it to 0 for a fixed sell price</strong> — the spot term drops out and you earn exactly the Export Compensation below, in every period.</div>
+                  <div><span className="font-medium text-blue-900 dark:text-blue-200">Export Compensation:</span> Per-kWh payment from grid operator (Nätnytta) when selling surplus electricity. Check your energy bill under "Producent/Självfaktura". E.g. E.ON: 0.1988 (19.88 öre/kWh). With the export multiplier at 0 this becomes your flat sell price — e.g. 0.0726 EUR/kWh in Lithuania.</div>
                 </div>
 
                 <div className="space-y-2 pt-2 border-t border-blue-200 dark:border-blue-700">
                   <p className="font-medium text-blue-900 dark:text-blue-200">How the raw spot price is converted:</p>
-                  <p className="pl-2 border-l-2 border-blue-300 dark:border-blue-600"><strong>Buy price:</strong> (raw spot + markup) × VAT multiplier + grid fees</p>
-                  <p className="pl-2 border-l-2 border-blue-300 dark:border-blue-600"><strong>Sell price:</strong> raw spot + export compensation</p>
+                  <p className="pl-2 border-l-2 border-blue-300 dark:border-blue-600"><strong>Buy price:</strong> (raw spot × import multiplier + markup) × VAT multiplier + grid fees</p>
+                  <p className="pl-2 border-l-2 border-blue-300 dark:border-blue-600"><strong>Sell price:</strong> raw spot × export multiplier + export compensation</p>
                   <p className="text-gray-500 dark:text-gray-500 italic">Note: Markup is added before VAT (ex-VAT), while grid fees already include VAT.</p>
                 </div>
               </div>
