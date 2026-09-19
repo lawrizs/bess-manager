@@ -98,6 +98,11 @@ const SetupWizardPage: React.FC = () => {
     powerMonitoringEnabled: false,
     gridExportPowerLimitKw: 0,
     managedLoadSensors: [],
+    peakShavingEnabled: false,
+    peakShavingStartTime: '07:00',
+    peakShavingEndTime: '20:00',
+    peakShavingDays: [0, 1, 2, 3, 4],
+    peakShavingMaxImportKw: 0,
   });
 
   const [pricingForm, setPricingForm] = useState<PricingForm>({

@@ -573,7 +573,7 @@ class PeriodInputs:
     solar_production: list[float]
     dt: float
     max_charge_power_per_period: list[float] | None = None
-    import_cap_kwh: float | None = None
+    import_cap_kwh: list[float | None] | None = None
     export_cap_kwh: float | None = None
     capabilities: PlatformCapabilities = DEFAULT_CAPABILITIES
     sell_price_floored: list[bool] | None = None
@@ -637,7 +637,15 @@ def select_action(
         else None
     )
     dt = period_inputs.dt
-    import_cap_kwh = period_inputs.import_cap_kwh
+    import_cap_kwh = (
+        period_inputs.import_cap_kwh[t]
+        if period_inputs.import_cap_kwh is not None
+        else None
+    )
+    # Constant, unlike the import cap: a DSO feed-in ceiling is a property
+    # of the grid connection, so it carries no per-period variation of its
+    # own. `_period_ac_cap_kwh` below is what makes its *effect* per-period,
+    # by folding it against this period's home_consumption.
     export_cap_kwh = period_inputs.export_cap_kwh
     home = period_inputs.home_consumption[t]
     solar = period_inputs.solar_production[t]

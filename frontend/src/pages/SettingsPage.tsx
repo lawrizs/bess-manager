@@ -49,6 +49,8 @@ const EMPTY_HOME: HomeForm = {
   phaseCount: 3, powerMonitoringEnabled: true,
   gridExportPowerLimitKw: 0,
   managedLoadSensors: [],
+  peakShavingEnabled: false, peakShavingStartTime: '07:00', peakShavingEndTime: '20:00',
+  peakShavingDays: [0, 1, 2, 3, 4], peakShavingMaxImportKw: 0,
 };
 const EMPTY_PRICING: PricingForm = {
   currency: 'SEK',
@@ -192,6 +194,11 @@ const SettingsPage: React.FC = () => {
         powerMonitoringEnabled: home_s.powerMonitoringEnabled ?? true,
         gridExportPowerLimitKw: home_s.gridExportPowerLimitKw ?? 0,
         managedLoadSensors: home_s.managedLoadSensors ?? [],
+        peakShavingEnabled: home_s.peakShaving?.enabled ?? false,
+        peakShavingStartTime: home_s.peakShaving?.startTime ?? '07:00',
+        peakShavingEndTime: home_s.peakShaving?.endTime ?? '20:00',
+        peakShavingDays: home_s.peakShaving?.days ?? [0, 1, 2, 3, 4],
+        peakShavingMaxImportKw: home_s.peakShaving?.maxImportKw ?? 0,
       };
       setHomeForm(h);
       savedHome.current = JSON.stringify(h);
@@ -411,6 +418,13 @@ const SettingsPage: React.FC = () => {
           // rejects an empty string as an invalid entity ID.
           managedLoadSensors: homeForm.managedLoadSensors.filter(Boolean),
           currency: pricingForm.currency,
+          peakShaving: {
+            enabled: homeForm.peakShavingEnabled,
+            startTime: homeForm.peakShavingStartTime,
+            endTime: homeForm.peakShavingEndTime,
+            days: homeForm.peakShavingDays,
+            maxImportKw: homeForm.peakShavingMaxImportKw,
+          },
         },
       });
       savedHome.current = JSON.stringify(homeForm);
