@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Grid Export Limit — tell BESS what your grid operator lets you feed in** — set the ceiling in kW under Settings → Home (0 = unlimited) and the day-ahead schedule plans within it: no period is ever scheduled to export above the limit, from solar or from the battery. Because energy that cannot leave the property is worth keeping, a limit also makes charging from surplus solar more attractive; whatever still cannot be exported or stored is reported as clipped solar rather than counted as export revenue. Planning only — nothing new is written to the inverter.
+
 ### Fixed
 
 - **SolaX VPP battery control now reaches the inverter** — BESS drives the mode 8 entities ("PV and BAT control - Duration") instead of the mode 1 remote-control select, which never accepted the mode string being sent, so every VPP period failed at the first service call. Battery power is negated on the way out, because solax_modbus's mode 8/9 push power reads positive as *discharge*.

@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from core.bess.dp_battery_algorithm import (
     _build_period_data,
     _effective_ac_cap_kwh,
+    _period_ac_cap_kwh,
     _period_flows,
     _state_transition,
 )
@@ -215,6 +216,7 @@ def vpp_command_to_power(
     soe: float,
     settings: BatterySettings,
     dt: float,
+    export_cap_kwh: float | None = None,
 ) -> float | None:
     """Battery power (kW; + charge, - discharge) the inverter applies under a
     VPP command. Returns None for "battery held exactly, solar bypasses to
@@ -237,7 +239,12 @@ def vpp_command_to_power(
     comparison inherit the error equally, so regression detection is
     unaffected; only an absolute cost reading would be.
     """
-    ac_cap_kwh = _effective_ac_cap_kwh(settings, dt)
+    # The DSO export ceiling tightens the AC cap (`_period_ac_cap_kwh`), so
+    # this headroom bounds battery-sourced export too -- the same clamp the
+    # plan was built under, which is what keeps realized == planned.
+    ac_cap_kwh = _period_ac_cap_kwh(
+        _effective_ac_cap_kwh(settings, dt), home, export_cap_kwh
+    )
     ac_headroom_kwh = (
         float("inf")
         if ac_cap_kwh is None
@@ -410,6 +417,7 @@ def simulate_vpp(
     dt: float,
     currency: str = "SEK",
     intra_period_discharge_allowed: list[bool] | None = None,
+    export_cap_kwh: float | None = None,
 ) -> VppSimulationResult:
     """Execute a VPP command sequence, carrying SoE forward, using the
     optimizer's own flow and accounting primitives -- same arrangement as
@@ -452,6 +460,7 @@ def simulate_vpp(
         settings,
         dt,
         currency,
+        export_cap_kwh,
     )
 
 
@@ -465,6 +474,7 @@ def simulate_vpp_commands(
     settings: BatterySettings,
     dt: float,
     currency: str = "SEK",
+    export_cap_kwh: float | None = None,
 ) -> VppSimulationResult:
     """Execute an explicit command sequence, bypassing derivation.
 
@@ -484,6 +494,7 @@ def simulate_vpp_commands(
         settings,
         dt,
         currency,
+        export_cap_kwh,
     )
 
 
@@ -498,6 +509,7 @@ def _simulate(
     settings: BatterySettings,
     dt: float,
     currency: str,
+    export_cap_kwh: float | None = None,
 ) -> VppSimulationResult:
     """The one execution loop. `command_at(period, soe)` supplies each
     period's command against the SoE the run has reached, which is what lets
@@ -509,7 +521,13 @@ def _simulate(
         cmd = command_at(t, soe)
         commands.append(cmd)
         power = vpp_command_to_power(
-            cmd, solar_production[t], home_consumption[t], soe, settings, dt
+            cmd,
+            solar_production[t],
+            home_consumption[t],
+            soe,
+            settings,
+            dt,
+            export_cap_kwh,
         )
         if power is None:
             next_soe = soe
@@ -531,6 +549,7 @@ def _simulate(
             solar_production=solar_production[t],
             battery_settings=settings,
             dt=dt,
+            export_cap_kwh=export_cap_kwh,
         )
         period_data.append(
             _build_period_data(

@@ -684,10 +684,58 @@ configured.
   with non-positive `max_fuse_current`/`voltage`/`safety_margin`), never a
   silent no-op inside the DP — matches `BatterySettings.__post_init__`'s
   existing validation pattern for `inverter_max_ac_power_kw`.
-- **Out of scope**: export-side/feed-in capacity limits (a different
-  regulatory concept), and any change to `HomePowerMonitor`'s own runtime
-  behavior — it remains the real-time safety net; this constraint just makes
-  the *plan* agree with it.
+- **Out of scope**: any change to `HomePowerMonitor`'s own runtime behavior —
+  it remains the real-time safety net; this constraint just makes the *plan*
+  agree with it. Export-side/feed-in capacity limits were out of scope for
+  #429 too, as a different regulatory concept; they are now modelled
+  separately — see the next section.
+
+### The grid export (feed-in) cap
+
+`HomeSettings.grid_export_power_limit_kw` (default `0.0` = unconstrained) is
+the DSO's feed-in ceiling: the most power the connection is allowed to accept.
+It is the third member of the cap family, and it is **planning-only** — the
+DP never schedules export above it, but nothing new is written to hardware.
+(#269's binary export-limit actuation is a separate, price-triggered
+mechanism and is unchanged.)
+
+- **Not gated on `power_monitoring_enabled`**, unlike the import cap. That
+  gate covers the fuse/current-sensor feature; a feed-in ceiling is a property
+  of the grid connection, present with or without live current monitoring.
+  Validated `>= 0` unconditionally in `HomeSettings.__post_init__`.
+- **Derivation**: `grid_export_power_limit_kw × dt`
+  (`_effective_export_cap_kwh`), with the same `<= 0.0 → None` convention as
+  the other two.
+- **It is carried as a tightening of the AC output cap, not as a constraint
+  of its own.** `_ac_flows` serves the home first and exports the remainder,
+  so bounding `grid_exported` by the cap is exactly bounding AC output by
+  `home_consumption + export_cap`. `_period_ac_cap_kwh` takes the tighter of
+  that and the inverter's own cap, and every existing clip and discharge
+  clamp then enforces it unchanged — because
+  `min(headroom(A), headroom(B)) == headroom(min(A, B))`. This is why the
+  feature adds no new mask, no new filter, and no edit to `_ac_flows` itself.
+  The one visible difference from the inverter cap: this one is
+  **period-dependent**, since it contains `home_consumption`.
+- **Both export sources are bound by the one expression.** Solar fills the
+  ceiling first and battery discharge gets the remaining headroom. That
+  ordering is not a preference — in a discharge disposition `_period_flows`
+  pins `solar_to_battery` to 0, so solar the ceiling excludes is simply lost;
+  letting battery export displace it would waste more PV *and* drain SoE that
+  still has option value.
+- **No "constrain, don't raise" floor is needed**, unlike the import cap.
+  Import has an irreducible floor (the home deficit); export does not — plain
+  IDLE is feasible in every state, because with no battery flow the clip alone
+  leaves `grid_exported <= export_cap`.
+- **Excluded solar is clipped, not curtailed-and-credited**: it lands in
+  `clipped_solar`, the same field AC clipping uses, so `EnergyData` and every
+  downstream report need no new field. A consequence worth knowing when
+  reading the UI: on a system with both caps configured, "clipped solar" is
+  the sum of both losses.
+- **Economic effect**: energy that cannot leave is worth keeping, and
+  `_price_flows`' existing clipping discount already prices it that way — the
+  opportunity cost of storing solar that would have been clipped anyway is
+  zero. So a binding ceiling makes charging from surplus solar strictly more
+  attractive. Pinned by `core/bess/tests/unit/test_grid_export_cap.py`.
 
 ### Export curtailment and the charge-early tie-break (#269)
 

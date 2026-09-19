@@ -9,6 +9,7 @@ from core.bess.dp_battery_algorithm import (
     POWER_STEP_KW,
     POWER_TOLERANCE_KW,
     _compute_reward,
+    _effective_export_cap_kwh,
     _effective_import_cap_kwh,
     optimize_battery_schedule,
 )
@@ -111,6 +112,31 @@ def _reject_unsupported_import_cap(inputs: dict) -> None:
             "objective mismatch rather than a coverage finding. Thread the "
             "effective cap into replay_schedule and segment_reference_cost "
             "before measuring such a scenario."
+        )
+
+
+def _reject_unsupported_export_cap(inputs: dict) -> None:
+    """Fail loudly on a scenario whose grid-export cap this harness does not
+    thread.
+
+    Identical reasoning to `_reject_unsupported_import_cap`, one side of the
+    AC stage over: a `home` block carrying `grid_export_power_limit_kw` makes
+    `optimize_battery_schedule` tighten every period's AC cap, while this
+    module's replay and reference solve pass no export cap at all. The delta
+    that produces is an objective mismatch, not a coverage finding.
+    """
+    cap = _effective_export_cap_kwh(
+        inputs.get("home_settings"), inputs["period_duration_hours"]
+    )
+    if cap is not None:
+        raise NotImplementedError(
+            "measure_tie_coverage cannot measure a scenario with a grid export "
+            f"cap ({cap} kWh per period, from its `home` block): the DP solves "
+            "under that cap while this harness replays and re-solves without "
+            "it, so any delta it reported would be an objective mismatch "
+            "rather than a coverage finding. Thread the effective cap into "
+            "replay_schedule and segment_reference_cost before measuring such "
+            "a scenario."
         )
 
 
@@ -544,6 +570,7 @@ def measure_scenario(scenario: dict) -> ScenarioMeasurement:
     # same NotImplementedError, but only after optimize_battery_schedule ran.
     _reject_unsupported_objective(inputs["battery_settings"])
     _reject_unsupported_import_cap(inputs)
+    _reject_unsupported_export_cap(inputs)
     diagnostics: dict = {}
     result = optimize_battery_schedule(**inputs, tie_diagnostics=diagnostics)
 

@@ -26,6 +26,7 @@ from core.bess.dp_battery_algorithm import (
     PeriodFlows,
     _compute_reward_grid,
     _effective_ac_cap_kwh,
+    _period_ac_cap_kwh,
     _state_transition_grid,
 )
 from core.bess.dp_constants import (
@@ -111,6 +112,7 @@ def _pwl_candidate_values_at(
     dt: float,
     period_max_charge: float | None,
     import_cap_kwh: float | None = None,
+    export_cap_kwh: float | None = None,
     capabilities: PlatformCapabilities = DEFAULT_CAPABILITIES,
 ) -> np.ndarray:
     """Best achievable value at each SOE in `X` for period `t`, evaluated in
@@ -165,6 +167,7 @@ def _pwl_candidate_values_at(
             dt,
             period_max_charge,
             import_cap_kwh,
+            export_cap_kwh,
             capabilities,
         )
     return np.concatenate(
@@ -179,6 +182,7 @@ def _pwl_candidate_values_at(
                 dt,
                 period_max_charge,
                 import_cap_kwh,
+                export_cap_kwh,
                 capabilities,
             )
             for i in range(0, X.size, block)
@@ -196,6 +200,7 @@ def _pwl_candidate_values_block(
     dt: float,
     period_max_charge: float | None,
     import_cap_kwh: float | None = None,
+    export_cap_kwh: float | None = None,
     capabilities: PlatformCapabilities = DEFAULT_CAPABILITIES,
 ) -> np.ndarray:
     """One block of `_pwl_candidate_values_at`: max over the shared action set
@@ -211,7 +216,13 @@ def _pwl_candidate_values_block(
     min_soe = battery_settings.min_soe_kwh
     max_soe = battery_settings.max_soe_kwh
     soe_col = X.reshape(-1, 1)
-    ac_cap_kwh = _effective_ac_cap_kwh(battery_settings, dt)
+    # The DSO export ceiling rides in as a tightening of the AC cap (see
+    # `_period_ac_cap_kwh`), so every clamp below enforces it unchanged.
+    ac_cap_kwh = _period_ac_cap_kwh(
+        _effective_ac_cap_kwh(battery_settings, dt),
+        home_consumption[t],
+        export_cap_kwh,
+    )
     rate_step = capabilities.discharge_rate_step_kw(battery_settings)
 
     # Residual load-cover candidate (#466 follow-up): the replay's
@@ -253,6 +264,7 @@ def _pwl_candidate_values_block(
         current_sell_price=sell_price[t],
         solar_production=solar_production[t],
         import_cap_kwh=import_cap_kwh,
+        export_cap_kwh=export_cap_kwh,
     )
 
     # STORE feasibility: the same rule replay's _charge_candidate applies
@@ -350,7 +362,7 @@ def _pwl_candidate_values_block(
     # grid above) is what the hardware does instead, which is why dropping
     # the column cannot leave a row without a finite action.
     if _solar_export_bypass_is_unexecutable(
-        solar_production[t], home_consumption[t], battery_settings, dt
+        solar_production[t], home_consumption[t], battery_settings, dt, export_cap_kwh
     ):
         return value.max(axis=1)
 
@@ -366,6 +378,7 @@ def _pwl_candidate_values_block(
         current_sell_price=sell_price[t],
         solar_production=solar_production[t],
         import_cap_kwh=import_cap_kwh,
+        export_cap_kwh=export_cap_kwh,
     )
     value_bypass = reward_bypass + _pwl_eval_array(V_next, soe_col)
     if effective_import_cap is not None:
@@ -431,6 +444,7 @@ def _pwl_best_action_at_continuous_state(
     max_charge_power_per_period: list[float] | None,
     capabilities: PlatformCapabilities = DEFAULT_CAPABILITIES,
     import_cap_kwh: float | None = None,
+    export_cap_kwh: float | None = None,
     sell_price_floored: list[bool] | None = None,
 ) -> tuple[float, float, float, float, PeriodFlows]:
     """The PWL window's forward replay: `action_selector.select_action` with
@@ -469,6 +483,7 @@ def _pwl_best_action_at_continuous_state(
             dt=dt,
             max_charge_power_per_period=max_charge_power_per_period,
             import_cap_kwh=import_cap_kwh,
+            export_cap_kwh=export_cap_kwh,
             capabilities=capabilities,
             sell_price_floored=sell_price_floored,
         ),
@@ -743,6 +758,7 @@ def run_pwl_window_backward_induction(
     max_charge_power_per_period: list[float] | None = None,
     capabilities: PlatformCapabilities = DEFAULT_CAPABILITIES,
     import_cap_kwh: float | None = None,
+    export_cap_kwh: float | None = None,
 ) -> list[tuple[np.ndarray, np.ndarray]]:
     """Exact PWL backward induction over a short sub-horizon window whose end
     SOE is pinned to `end_soe_target` (see `_pinned_terminal_row`).
@@ -771,6 +787,10 @@ def run_pwl_window_backward_induction(
     house's fuse cannot carry, in exactly the periods where the constraint is
     most likely to bind. Passing `None` means "no cap", which is correct only
     when fuse protection is disabled.
+
+    `export_cap_kwh` carries the same obligation for the DSO's feed-in
+    ceiling: a window re-solved without it splices back an action exporting
+    more than the connection allows, precisely where the constraint binds.
 
     Infeasible targets are not an error: if the window physically cannot
     reach `end_soe_target` from the caller's start SOE (rate limits, the
@@ -830,6 +850,7 @@ def run_pwl_window_backward_induction(
                 dt,
                 _pmc,
                 import_cap_kwh,
+                export_cap_kwh,
                 capabilities,
             )
 
@@ -947,6 +968,7 @@ def resolve_pwl_window(
     max_charge_power_per_period: list[float] | None = None,
     capabilities: PlatformCapabilities = DEFAULT_CAPABILITIES,
     import_cap_kwh: float | None = None,
+    export_cap_kwh: float | None = None,
     sell_price_floored: list[bool] | None = None,
 ) -> list[tuple[float, float, PeriodFlows]]:
     """Forward-replay the window's resolved value table `V` (from
@@ -965,7 +987,7 @@ def resolve_pwl_window(
 
     `import_cap_kwh` must be the same fuse-derived grid-import cap (#429) the
     backward induction was run with, so the replayed actions obey the same
-    constraint the value table was built under.
+    constraint the value table was built under. `export_cap_kwh` likewise.
 
     Returns `[(power, next_soe), ...]` for each of the window's periods.
     """
@@ -997,6 +1019,7 @@ def resolve_pwl_window(
             max_charge_power_per_period=max_charge_power_per_period,
             capabilities=capabilities,
             import_cap_kwh=import_cap_kwh,
+            export_cap_kwh=export_cap_kwh,
             sell_price_floored=sell_price_floored,
         )
         actions.append((action, next_soe, flows))

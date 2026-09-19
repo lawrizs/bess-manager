@@ -3199,6 +3199,7 @@ async def setup_complete(payload: APISetupCompletePayload):
             "safetyMarginFactor": "safety_margin",
             "phaseCount": "phase_count",
             "powerMonitoringEnabled": "power_monitoring_enabled",
+            "gridExportPowerLimitKw": "grid_export_power_limit_kw",
             "managedLoadSensors": "managed_load_sensors",
         }
         if any(getattr(payload, f) is not None for f in _HOME_MAP):

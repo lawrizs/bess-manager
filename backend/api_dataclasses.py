@@ -1164,6 +1164,7 @@ class APISetupCompletePayload(BaseModel):
     safetyMarginFactor: float | None = None
     phaseCount: int | None = None
     powerMonitoringEnabled: bool | None = None
+    gridExportPowerLimitKw: float | None = None
     managedLoadSensors: list[str] | None = None
     # Electricity price settings
     area: str | None = None
