@@ -4,6 +4,12 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **The spot multipliers are now editable for every price provider, not just ENTSO-e** — Import and Export Spot Multiplier were previously hidden unless you used ENTSO-e, even though the backend applied them for all of them. Both now appear in Settings → Pricing for any non-Octopus provider, and their minimum is 0 rather than 0.5. Setting **Export Spot Multiplier to 0** removes the spot term from the sell price, so Export Compensation becomes a flat per-kWh sell price — which is how a fixed export rate (e.g. 0.0726 EUR/kWh in Lithuania) is configured. No settings change: existing installs keep the 1.0 default and price exactly as before.
+
 ## [11.1.0-ls] - 2026-09-19
 
 ### Added

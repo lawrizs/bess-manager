@@ -298,13 +298,26 @@ Once BESS has the raw spot price from your provider, it applies your configured 
 - **Markup Rate**: Your energy provider's margin fee, applied before VAT. E.g. Tibber charges ~0.08 SEK/kWh, Ellevio ~0.15.
 - **VAT Multiplier**: The VAT factor. 1.25 = 25% (Sweden/Norway), 1.24 = 24% (Finland), 1.22 = 22% (Estonia), 1.20 = 20% (UK).
 - **Additional Costs**: Grid transfer fee + energy tax, summed as a single per-kWh value including VAT. E.g. E.ON: (0.2584 + 0.3600) × 1.25 = 0.773 SEK/kWh.
+- **Import Spot Multiplier** / **Export Spot Multiplier**: Contract-specific factors applied to the raw spot price, on the import and export sides respectively. Leave both at 1.0 unless your contract scales spot.
 - **Export Compensation**: Per-kWh payment from your grid operator when you sell surplus electricity. Check your energy bill, e.g. E.ON under "Producent/Självfaktura": 0.1988 SEK/kWh.
 - **Time-of-use grid fee** (optional): For operators that bill distribution by time of day rather than at one flat rate — e.g. ESO in Lithuania. Switch it on and enter a final, VAT-inclusive rate per period; it is added *on top of* Additional Costs, so keep whatever flat component you still pay there and set it to 0 if the whole grid fee is time-varying.
 
 The formulas:
 
-- **Buy price** = (spot + markup) × VAT multiplier + additional costs + time-of-use grid fee
-- **Sell price** = spot + export compensation
+- **Buy price** = (spot × import multiplier + markup) × VAT multiplier + additional costs + time-of-use grid fee
+- **Sell price** = spot × export multiplier + export compensation
+
+#### Setting a fixed sell price
+
+Some contracts pay a flat rate per exported kWh rather than anything derived
+from spot — e.g. 0.0726 EUR/kWh in Lithuania. Express that by removing the spot
+term from the sell side:
+
+- **Export Spot Multiplier** = `0`
+- **Export Compensation** = your flat rate (e.g. `0.0726`)
+
+The sell price is then exactly that rate in every period, whatever spot does.
+Import pricing is unaffected — the import multiplier is separate.
 
 The distribution fee is billed on import only, so it never affects the sell price.
 

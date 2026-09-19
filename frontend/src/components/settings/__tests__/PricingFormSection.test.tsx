@@ -79,4 +79,48 @@ describe('PricingFormSection', () => {
       expect.objectContaining({ gridFeeEvening: 0.2, gridFeeNight: 0.06292 }),
     );
   });
+
+  it('offers both spot multipliers on Nord Pool, not only on ENTSO-e', () => {
+    render(<PricingFormSection form={BASE_FORM} onChange={vi.fn()} />);
+
+    expect(screen.getByLabelText(/Import Spot Multiplier/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Export Spot Multiplier/i)).toBeInTheDocument();
+  });
+
+  it('accepts an export multiplier of 0, which a min of 0.5 used to block', () => {
+    const onChange = vi.fn();
+    render(<PricingFormSection form={BASE_FORM} onChange={onChange} />);
+
+    const input = screen.getByLabelText(/Export Spot Multiplier/i);
+    expect(input).toHaveAttribute('min', '0');
+
+    fireEvent.change(input, { target: { value: '0' } });
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ exportSpotMultiplier: 0 }),
+    );
+  });
+
+  it('previews a flat sell price when the export multiplier is 0', () => {
+    // The Lithuanian case: spot drops out, leaving the compensation alone.
+    render(
+      <PricingFormSection
+        form={{ ...BASE_FORM, exportSpotMultiplier: 0, taxReduction: 0.0726 }}
+        onChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('0.07 SEK/kWh')).toBeInTheDocument();
+  });
+
+  it('still tracks spot when the export multiplier is 1', () => {
+    render(
+      <PricingFormSection
+        form={{ ...BASE_FORM, exportSpotMultiplier: 1, taxReduction: 0.0726 }}
+        onChange={vi.fn()}
+      />,
+    );
+
+    // preview spot is 1.00, so 1.00 * 1 + 0.0726
+    expect(screen.getByText('1.07 SEK/kWh')).toBeInTheDocument();
+  });
 });

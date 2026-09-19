@@ -281,8 +281,18 @@ electricity_price:
 **How the raw spot price is converted to your buy and sell prices:**
 
 ```
-Buy price  = (raw spot + markup) × VAT multiplier + additional costs + time-of-use grid fee
-Sell price = raw spot + tax reduction
+Buy price  = (raw spot × spot_multiplier + markup) × VAT multiplier + additional costs + time-of-use grid fee
+Sell price = raw spot × export_spot_multiplier + tax reduction
+```
+
+**Fixed sell price:** set `export_spot_multiplier: 0.0` and put your flat rate in
+`tax_reduction`. The spot term drops out, so every period sells at exactly that
+rate — e.g. Lithuania's 0.0726 EUR/kWh:
+
+```yaml
+electricity_price:
+  export_spot_multiplier: 0.0
+  tax_reduction: 0.0726
 ```
 
 **Note:** The markup is applied *before* VAT (it's ex-VAT), but the additional costs are already VAT-inclusive.
