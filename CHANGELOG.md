@@ -4,7 +4,7 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [11.1.0-ls] - 2026-09-19
 
 ### Added
 
@@ -18,9 +18,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Fixed
 
+- **A battery charged slightly above `maxSoc` no longer bricks the whole day's optimization** — when the inverter reads a hair above the configured ceiling (e.g. charges to 93% with `maxSoc` 90%), `optimize_battery_schedule` raised `initial_soe exceeds capacity` and produced no schedule, so the battery sat idle — and, unable to discharge back into range, stayed over-max and re-failed every cycle (observed: 69 consecutive failures across a full day, a peak-price evening wasted). The over-max case now clamps to `max_soe` and warns, symmetric with the existing below-min handling, letting the optimizer discharge the battery back within range. ([#771](https://github.com/johanzander/bess-manager/pull/771))
+
+## [11.0.3-ls] - 2026-09-17
+
+### Fixed
+
 - **SolaX VPP battery control now reaches the inverter** — BESS drives the mode 8 entities ("PV and BAT control - Duration") instead of the mode 1 remote-control select, which never accepted the mode string being sent, so every VPP period failed at the first service call. Battery power is negated on the way out, because solax_modbus's mode 8/9 push power reads positive as *discharge*.
+
+## [11.0.1-ls] - 2026-09-17
+
+### Fixed
+
 - **The battery's stored-energy cost basis no longer overstates the grid's share during deliberate grid charging** — during `GRID_CHARGING` periods the accounting now attributes concurrent solar to the battery first (matching the battery-first inverter topology), instead of assuming the home-first order that only holds for solar-surplus charging. ([#536](https://github.com/johanzander/bess-manager/issues/536))
-- **A battery charged slightly above `maxSoc` no longer bricks the whole day's optimization** — when the inverter reads a hair above the configured ceiling (e.g. charges to 93% with `maxSoc` 90%), `optimize_battery_schedule` raised `initial_soe exceeds capacity` and produced no schedule, so the battery sat idle — and, unable to discharge back into range, stayed over-max and re-failed every cycle (observed: 69 consecutive failures across a full day, a peak-price evening wasted). The over-max case now clamps to `max_soe` and warns, symmetric with the existing below-min handling, letting the optimizer discharge the battery back within range.
 
 ## [11.0.0] - 2026-09-13
 
