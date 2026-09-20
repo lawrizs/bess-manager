@@ -1736,6 +1736,34 @@ async def recheck_system_health():
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+@router.post("/api/schedule/reoptimize")
+async def reoptimize_schedule() -> dict[str, Any]:
+    """Rebuild the battery schedule now, instead of waiting for the next
+    quarter-hour scheduler run.
+
+    A settings change applies to the running system immediately but does not
+    itself replan -- the schedule in force is whatever the last optimizer run
+    produced, so a new cycle cost or price setting can sit up to 15 minutes
+    before it shows up in the plan. This is the button that closes that gap.
+
+    Runs the same call the quarterly job does, synchronously, so the response
+    means the new schedule is actually in force rather than merely queued.
+    """
+    from app import bess_controller
+
+    _require_configured_system(bess_controller)
+
+    try:
+        now = time_utils.now()
+        current_period = now.hour * 4 + now.minute // 15
+        bess_controller.system.update_battery_schedule(current_period=current_period)
+        logger.info("Schedule rebuilt on manual request (period %d)", current_period)
+        return {"status": "ok", "currentPeriod": current_period}
+    except Exception as e:
+        logger.error(f"Manual re-optimization failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 def _device_maps_from(controller: Any) -> tuple[dict, dict]:
     """Resolve HA entity/device registry maps for banner grouping.
 

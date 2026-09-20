@@ -134,3 +134,81 @@ describe('DashboardPage historical day navigation', () => {
     expect(screen.getByTestId('system-status-card')).toHaveTextContent(iso);
   });
 });
+
+
+describe('DashboardPage re-optimize now', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.spyOn(scheduleApi, 'fetchAvailableDashboardDates').mockResolvedValue([
+      toISODate(yesterday),
+      toISODate(today),
+    ]);
+    vi.spyOn(api, 'get').mockImplementation((url: string) => {
+      if (url === '/api/dashboard') {
+        return Promise.resolve({
+          data: { hourlyData: [{ hour: 0 }], currentHour: 0, summary: {}, totals: {} },
+        });
+      }
+      if (url === '/api/dashboard-health-summary') {
+        return Promise.resolve({
+          data: {
+            hasCriticalErrors: false,
+            hasWarnings: false,
+            criticalIssues: [],
+            totalCriticalIssues: 0,
+            timestamp: '',
+          },
+        });
+      }
+      if (url === '/api/historical-data-status') {
+        return Promise.resolve({ data: { isIncomplete: false } });
+      }
+      return Promise.resolve({ data: {} });
+    });
+  });
+
+  it('rebuilds the schedule and refreshes the dashboard', async () => {
+    const post = vi.spyOn(api, 'post').mockResolvedValue({ data: { status: 'ok' } });
+    renderDashboard();
+    await screen.findByTestId('energy-flow-cards');
+
+    const getCalls = vi.mocked(api.get).mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: /Re-optimize now/i }));
+
+    await waitFor(() => {
+      expect(post).toHaveBeenCalledWith('/api/schedule/reoptimize');
+    });
+    // The new plan is only visible once the dashboard re-reads it.
+    await waitFor(() => {
+      expect(vi.mocked(api.get).mock.calls.length).toBeGreaterThan(getCalls);
+    });
+  });
+
+  it('surfaces a failure instead of implying the schedule changed', async () => {
+    vi.spyOn(api, 'post').mockRejectedValue(new Error('no prices'));
+    renderDashboard();
+    await screen.findByTestId('energy-flow-cards');
+
+    fireEvent.click(screen.getByRole('button', { name: /Re-optimize now/i }));
+
+    expect(await screen.findByText(/Re-optimization failed/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Schedule rebuilt at/i)).not.toBeInTheDocument();
+  });
+
+  it('is hidden on a historical day, which cannot be replanned', async () => {
+    renderDashboard();
+    await screen.findByTestId('energy-flow-cards');
+    expect(screen.getByRole('button', { name: /Re-optimize now/i })).toBeInTheDocument();
+
+    const prevDayButton = screen
+      .getAllByRole('button')
+      .find((b) => b.querySelector('svg.lucide-chevron-left'));
+    fireEvent.click(prevDayButton as HTMLElement);
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('button', { name: /Re-optimize now/i }),
+      ).not.toBeInTheDocument();
+    });
+  });
+});
