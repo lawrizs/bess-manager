@@ -63,7 +63,8 @@ const SetupWizardPage: React.FC = () => {
     totalCapacity: 30.0,
     minSoc: 15,
     maxSoc: 95,
-    maxChargeDischargePowerKw: 15.0,
+    maxChargePowerKw: 15.0,
+    maxDischargePowerKw: 15.0,
     cycleCostPerKwh: 0.50,
     efficiencyCharge: 97,
     efficiencyDischarge: 97,
@@ -309,7 +310,8 @@ const SetupWizardPage: React.FC = () => {
         totalCapacity:            bat.totalCapacity            ?? f.totalCapacity,
         minSoc:                   bat.minSoc                   ?? f.minSoc,
         maxSoc:                   bat.maxSoc                   ?? f.maxSoc,
-        maxChargeDischargePowerKw: bat.maxChargePowerKw        ?? f.maxChargeDischargePowerKw,
+        maxChargePowerKw:      bat.maxChargePowerKw           ?? f.maxChargePowerKw,
+        maxDischargePowerKw:   bat.maxDischargePowerKw        ?? f.maxDischargePowerKw,
         cycleCostPerKwh:          bat.cycleCostPerKwh          ?? f.cycleCostPerKwh,
         efficiencyCharge:         bat.efficiencyCharge         ?? f.efficiencyCharge,
         efficiencyDischarge:      bat.efficiencyDischarge      ?? f.efficiencyDischarge,
@@ -405,7 +407,8 @@ const SetupWizardPage: React.FC = () => {
         totalCapacity: batteryForm.totalCapacity,
         minSoc: batteryForm.minSoc,
         maxSoc: batteryForm.maxSoc,
-        maxChargeDischargePower: batteryForm.maxChargeDischargePowerKw,
+        maxChargePowerKw: batteryForm.maxChargePowerKw,
+        maxDischargePowerKw: batteryForm.maxDischargePowerKw,
         cycleCost: batteryForm.cycleCostPerKwh,
         // Home
         currency: pricingForm.currency,
@@ -778,8 +781,8 @@ const SetupWizardPage: React.FC = () => {
                 <span className="font-medium text-gray-900 dark:text-white">{batteryForm.minSoc}% – {batteryForm.maxSoc}%</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-gray-500 dark:text-gray-400">Max power</span>
-                <span className="font-medium text-gray-900 dark:text-white">{batteryForm.maxChargeDischargePowerKw} kW</span>
+                <span className="text-gray-500 dark:text-gray-400">Max charge / discharge power</span>
+                <span className="font-medium text-gray-900 dark:text-white">{batteryForm.maxChargePowerKw} / {batteryForm.maxDischargePowerKw} kW</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500 dark:text-gray-400">Inverter type</span>

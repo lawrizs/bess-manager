@@ -6,7 +6,8 @@ export interface BatteryForm {
   totalCapacity: number;
   minSoc: number;
   maxSoc: number;
-  maxChargeDischargePowerKw: number;
+  maxChargePowerKw: number;
+  maxDischargePowerKw: number;
   cycleCostPerKwh: number;
   efficiencyCharge: number;
   efficiencyDischarge: number;
@@ -49,11 +50,13 @@ export function BatteryFormSection({
 
       <SectionCard
         title="Power"
-        description="Maximum charge and discharge power available to the optimizer. Calculate from your battery's C-rate: e.g. 30 kWh × 0.5C = 15 kW."
+        description="Maximum charge and discharge power available to the optimizer. Set them separately if your inverter charges and discharges at different rates; otherwise use the same value for both. Calculate from your battery's C-rate: e.g. 30 kWh × 0.5C = 15 kW."
       >
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {numField('Max Charge / Discharge Power', form.maxChargeDischargePowerKw,
-            v => onChange({ ...form, maxChargeDischargePowerKw: v }), { unit: 'kW', min: 0, step: 0.1 })}
+          {numField('Max Charge Power', form.maxChargePowerKw,
+            v => onChange({ ...form, maxChargePowerKw: v }), { unit: 'kW', min: 0, step: 0.1 })}
+          {numField('Max Discharge Power', form.maxDischargePowerKw,
+            v => onChange({ ...form, maxDischargePowerKw: v }), { unit: 'kW', min: 0, step: 0.1 })}
         </div>
       </SectionCard>
 

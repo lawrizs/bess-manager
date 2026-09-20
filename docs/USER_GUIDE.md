@@ -250,6 +250,7 @@ The logs show:
 
 - **Total Capacity**: Match your actual battery capacity exactly
 - **Min SOC**: Set safety margin (10-20% recommended)
+- **Max Charge Power** / **Max Discharge Power**: The power ceilings the optimizer plans within, in kW. Set them separately when your inverter charges and discharges at different rates; use the same value for both otherwise. Derive from your battery's C-rate — e.g. 30 kWh × 0.5C = 15 kW.
 - **Cycle Cost**: Balance between battery wear and optimization aggressiveness
 
 ### Electricity Price Settings

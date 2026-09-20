@@ -41,11 +41,16 @@ from core.bess.tests.helpers import make_battery_settings
 DT = 0.25
 
 
+# The two power caps were one UI field until they were split, so every case
+# here used to be symmetric. The asymmetric pair exercises the physics on a
+# battery whose charge and discharge limits differ -- both orderings, since
+# the lattice is built from whichever is larger.
+@pytest.mark.parametrize("power_limits_kw", [(10.0, 10.0), (10.0, 4.0), (4.0, 10.0)])
 @pytest.mark.parametrize("solar", [0.0, 0.4, 2.5])
 @pytest.mark.parametrize("home", [0.05, 0.5])
 @pytest.mark.parametrize("import_cap_kwh", [None, 0.6])
 def test_vectorized_evaluator_matches_the_selectors_scalar_physics(
-    solar, home, import_cap_kwh
+    solar, home, import_cap_kwh, power_limits_kw
 ):
     """Both passes must compute the same next_soe, reward and grid import for
     the same action -- exactly, not approximately.
@@ -54,7 +59,12 @@ def test_vectorized_evaluator_matches_the_selectors_scalar_physics(
     the `_grid` twins are what the backward pass estimates V with. Any gap
     means the DP optimizes one plan and the replay executes another.
     """
-    settings = make_battery_settings(inverter_max_ac_power_kw=5.0)
+    charge_kw, discharge_kw = power_limits_kw
+    settings = make_battery_settings(
+        inverter_max_ac_power_kw=5.0,
+        max_charge_power_kw=charge_kw,
+        max_discharge_power_kw=discharge_kw,
+    )
     soes = np.arange(settings.min_soe_kwh, settings.max_soe_kwh, 1.3)
     powers = np.array([-10.0, -3.0, -0.2, 0.0, 0.1, 4.0, 10.0])
 
