@@ -17,6 +17,20 @@ Once installed and configured, access your BESS Manager dashboard through:
 
 The main dashboard provides a real-time overview of your energy system:
 
+#### Re-optimize now
+
+BESS rebuilds the schedule automatically every quarter hour. Saving a setting
+applies it to the running system straight away but does not itself trigger a
+replan, so a change to prices, grid fees, cycle cost or the power limits only
+reaches the plan on the next scheduled run — up to 15 minutes later.
+
+**Re-optimize now** closes that gap: it runs the same optimization the
+scheduler does and waits for it to finish, so once the button returns the new
+schedule is in force. If the optimization fails — missing prices, an
+unreachable sensor — the error is shown and the previous schedule stays
+active. The button is hidden when you are viewing a past day, since history
+cannot be replanned.
+
 #### System Status Card
 
 - **Current SOC**: Battery charge percentage and energy (kWh)

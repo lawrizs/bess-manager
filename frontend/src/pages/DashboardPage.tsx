@@ -3,7 +3,7 @@ import { BatteryLevelChart } from '../components/BatteryLevelChart';
 import { EnergyFlowChart } from '../components/EnergyFlowChart';
 import { BatteryModeTimeline } from '../components/BatteryModeTimeline';
 import { BatterySettings, ElectricitySettings } from '../types';
-import { Clock, AlertCircle } from 'lucide-react';
+import { Clock, AlertCircle, RefreshCw } from 'lucide-react';
 import EnergyFlowCards from '../components/EnergyFlowCards';
 import SystemStatusCard from '../components/SystemStatusCard';
 import AlertBanner from '../components/AlertBanner';
@@ -112,6 +112,8 @@ export default function DashboardPage({
   
   const [healthSummary, setHealthSummary] = useState<HealthSummary | null>(null);
   const [isRecheckingHealth, setIsRecheckingHealth] = useState(false);
+  const [isReoptimizing, setIsReoptimizing] = useState(false);
+  const [reoptimizedAt, setReoptimizedAt] = useState<Date | null>(null);
   const [demoMode, setDemoMode] = useState(false);
   const [influxdbConfigPresent, setInfluxdbConfigPresent] = useState(false);
 
@@ -235,6 +237,26 @@ export default function DashboardPage({
     }
   }, [fetchData]);
 
+  // Rebuild the schedule now rather than waiting for the next quarter-hour
+  // run. Settings changes apply to the running system immediately but do not
+  // themselves replan, so without this a new setting can sit up to 15 minutes
+  // before it reaches the plan.
+  const handleReoptimize = useCallback(async () => {
+    setIsReoptimizing(true);
+    setError(null);
+    try {
+      await api.post('/api/schedule/reoptimize');
+      setReoptimizedAt(new Date());
+      await fetchData();
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
+      setError(`Re-optimization failed: ${errorMessage}`);
+      console.error('Re-optimization failed:', err);
+    } finally {
+      setIsReoptimizing(false);
+    }
+  }, [fetchData]);
+
   useEffect(() => {
     fetchData();
     // A historical day is static — fetch once, don't poll. Otherwise poll every
@@ -341,6 +363,25 @@ export default function DashboardPage({
               <Clock className="h-4 w-4 mr-1" />
               Last updated: {lastUpdate.toLocaleTimeString()}
             </div>
+            {/* Today only: a past day's plan is history, not something to replan. */}
+            {!isHistorical && (
+              <div className="mt-3 flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleReoptimize}
+                  disabled={isReoptimizing}
+                  className="inline-flex items-center gap-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-200 shadow-sm transition-colors hover:bg-gray-50 dark:hover:bg-gray-600 disabled:cursor-not-allowed disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <RefreshCw className={`h-4 w-4 ${isReoptimizing ? 'animate-spin' : ''}`} aria-hidden="true" />
+                  {isReoptimizing ? 'Re-optimizing…' : 'Re-optimize now'}
+                </button>
+                {reoptimizedAt && !isReoptimizing && (
+                  <span className="text-xs text-gray-500 dark:text-gray-400">
+                    Schedule rebuilt at {reoptimizedAt.toLocaleTimeString()}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="flex flex-col items-end gap-3">
