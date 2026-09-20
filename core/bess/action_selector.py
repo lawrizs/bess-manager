@@ -278,6 +278,38 @@ def _residual_cover_p(
     return residual_p
 
 
+def _battery_to_grid_cap_kwh(
+    battery_settings: BatterySettings, dt: float
+) -> float | None:
+    """Per-period battery-to-grid export ceiling (kWh), or None when off.
+
+    A cap of 0.0 is meaningful -- "never export from the battery" -- so the
+    opt-in flag is what enables this, never a non-zero value. That is the one
+    place it differs in shape from the home's grid_export_power_limit_kw,
+    where 0 means unconstrained.
+    """
+    if not battery_settings.max_battery_to_grid_enabled:
+        return None
+    return battery_settings.max_battery_to_grid_power_kw * dt
+
+
+def _residual_load_kwh(
+    home_consumption: float, solar_production: float, ac_cap_kwh: float | None
+) -> float:
+    """Home load (kWh) left for the battery once solar has served what it can.
+
+    Mirrors the flow derivation's ordering (core/bess/models.py): solar serves
+    the home first, the battery covers the remainder, and only discharge
+    beyond that remainder is export. Solar above the inverter's AC cap is
+    clipped and never reaches the home, so it cannot displace battery load
+    coverage either.
+    """
+    ac_solar = (
+        solar_production if ac_cap_kwh is None else min(solar_production, ac_cap_kwh)
+    )
+    return max(0.0, home_consumption - min(ac_solar, home_consumption))
+
+
 def _discharge_candidates(
     soe: float,
     battery_settings: BatterySettings,
@@ -326,6 +358,23 @@ def _discharge_candidates(
         # the matching feasibility mask in _run_dynamic_programming.
         ac_headroom_kwh = max(0.0, ac_cap_kwh - min(solar_production, ac_cap_kwh))
         p_max = min(p_max, ac_headroom_kwh / dt)
+    battery_to_grid_cap_kwh = _battery_to_grid_cap_kwh(battery_settings, dt)
+    if battery_to_grid_cap_kwh is not None:
+        # Unlike the home's total feed-in limit (folded into the AC cap by
+        # _period_ac_cap_kwh), a battery-only export ceiling cannot be
+        # expressed as an AC-output bound -- that would constrain solar
+        # export too. It is a bound on discharge instead: flow derivation
+        # serves the home from solar first and the battery second, exporting
+        # whatever discharge is left over, so discharge up to the load the
+        # battery still has to cover is not export and stays uncapped.
+        p_max = min(
+            p_max,
+            (
+                _residual_load_kwh(home_consumption, solar_production, ac_cap_kwh)
+                + battery_to_grid_cap_kwh
+            )
+            / dt,
+        )
     if p_max <= POWER_TOLERANCE_KW:
         return []
 

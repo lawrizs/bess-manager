@@ -3190,6 +3190,8 @@ async def setup_complete(payload: APISetupCompletePayload):
             "cycleCost": "cycle_cost_per_kwh",
             "maxChargePowerKw": "max_charge_power_kw",
             "maxDischargePowerKw": "max_discharge_power_kw",
+            "maxBatteryToGridEnabled": "max_battery_to_grid_enabled",
+            "maxBatteryToGridPowerKw": "max_battery_to_grid_power_kw",
         }
         if any(getattr(payload, f) is not None for f in _BATTERY_MAP):
             battery = bess_controller.settings_store.get_section("battery")
@@ -3351,6 +3353,8 @@ async def setup_complete(payload: APISetupCompletePayload):
                     "max_soc": payload.maxSoc,
                     "max_charge_power_kw": payload.maxChargePowerKw,
                     "max_discharge_power_kw": payload.maxDischargePowerKw,
+                    "max_battery_to_grid_enabled": payload.maxBatteryToGridEnabled,
+                    "max_battery_to_grid_power_kw": payload.maxBatteryToGridPowerKw,
                     "cycle_cost_per_kwh": payload.cycleCost,
                 }
             )

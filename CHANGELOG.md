@@ -4,6 +4,12 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Cap battery exports to the grid** — a new opt-in limit under Settings → Battery on how much power the *battery* may feed into the grid, for connections that allow solar export but restrict exporting stored energy. Set it to **0 kW** and the battery never exports at all while still discharging to cover home load. It is distinct from Home → Grid Export Limit, which caps total feed-in from solar and battery together: solar export stays unconstrained here. Off by default, so no existing install replans.
+
 ## [11.2.0-ls] - 2026-09-20
 
 ### Added

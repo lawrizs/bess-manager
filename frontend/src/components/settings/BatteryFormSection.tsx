@@ -8,6 +8,8 @@ export interface BatteryForm {
   maxSoc: number;
   maxChargePowerKw: number;
   maxDischargePowerKw: number;
+  maxBatteryToGridEnabled: boolean;
+  maxBatteryToGridPowerKw: number;
   cycleCostPerKwh: number;
   efficiencyCharge: number;
   efficiencyDischarge: number;
@@ -57,6 +59,25 @@ export function BatteryFormSection({
             v => onChange({ ...form, maxChargePowerKw: v }), { unit: 'kW', min: 0, step: 0.1 })}
           {numField('Max Discharge Power', form.maxDischargePowerKw,
             v => onChange({ ...form, maxDischargePowerKw: v }), { unit: 'kW', min: 0, step: 0.1 })}
+        </div>
+
+        <div className="mt-4 space-y-3 border-t border-gray-200 dark:border-gray-700 pt-4">
+          {toggle('Limit battery export to grid', form.maxBatteryToGridEnabled,
+            v => onChange({ ...form, maxBatteryToGridEnabled: v }))}
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            Caps how much power the <strong>battery</strong> may feed into the grid, for
+            connections that allow solar export but restrict exporting stored energy.
+            Set it to <strong>0 kW</strong> to stop the battery exporting entirely — it
+            still discharges to cover your home load. This is separate from Home → Grid
+            Export Limit, which caps your total feed-in from solar and battery together.
+          </p>
+          {form.maxBatteryToGridEnabled && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {numField('Max Battery-to-Grid Power', form.maxBatteryToGridPowerKw,
+                v => onChange({ ...form, maxBatteryToGridPowerKw: v }),
+                { unit: 'kW (0 = no battery export)', min: 0, step: 0.1 })}
+            </div>
+          )}
         </div>
       </SectionCard>
 

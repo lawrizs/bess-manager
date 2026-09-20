@@ -130,6 +130,12 @@ export interface BatterySettings {
   inverterMaxAcPowerKw: number;     // kW total AC output cap
   inverterAcPowerMargin: number; // 0-1 model-side haircut on the cap
 
+  // Battery-to-grid export ceiling — opt-in, and distinct from the home's
+  // gridExportPowerLimitKw, which caps total feed-in. 0 is meaningful here
+  // ("never export from the battery"), so the flag is what enables it.
+  maxBatteryToGridEnabled: boolean;
+  maxBatteryToGridPowerKw: number;
+
   // PV export-limit curtailment (issue #269) — opt-in, requires a grid
   // CT/smart meter and a platform with export-limit register support.
   exportCurtailmentEnabled: boolean;

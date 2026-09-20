@@ -1356,7 +1356,9 @@ def _run_dynamic_programming(
     # circular -- the same arrangement pwl_window_dp already has with this
     # file.
     from core.bess.action_selector import (
+        _battery_to_grid_cap_kwh,
         _residual_cover_p,
+        _residual_load_kwh,
         _solar_export_bypass_is_unexecutable,
     )
 
@@ -1416,6 +1418,7 @@ def _run_dynamic_programming(
     discharge_feasible = ~is_discharge | (np.abs(power_row) <= max_discharge_power)
 
     inverter_ac_cap_kwh = _effective_ac_cap_kwh(battery_settings, dt)
+    battery_to_grid_cap_kwh = _battery_to_grid_cap_kwh(battery_settings, dt)
 
     # Backward induction
     for t in reversed(range(horizon)):
@@ -1446,6 +1449,17 @@ def _run_dynamic_programming(
                 0.0, ac_cap_kwh - min(solar_production[t], ac_cap_kwh)
             )
             feasible &= ~is_discharge | (np.abs(power_row) * dt <= ac_headroom_kwh)
+
+        if battery_to_grid_cap_kwh is not None:
+            # Mirrors the bound _discharge_candidates applies, so this pass
+            # cannot value battery export the replay will not enumerate.
+            # Period-dependent, since the load left for the battery to cover
+            # depends on this period's consumption and solar.
+            discharge_bound_kwh = (
+                _residual_load_kwh(home_consumption[t], solar_production[t], ac_cap_kwh)
+                + battery_to_grid_cap_kwh
+            )
+            feasible &= ~is_discharge | (np.abs(power_row) * dt <= discharge_bound_kwh)
 
         # Deliberately NOT masked by _discharge_is_unexecutable (#497): this
         # pass only estimates V on a coarse POWER_STEP_KW lattice; actions are
