@@ -15,8 +15,10 @@ import numpy as np
 
 from core.bess.action_selector import (
     PeriodInputs,
+    _battery_to_grid_cap_kwh,
     _discharge_is_unexecutable,
     _residual_cover_p,
+    _residual_load_kwh,
     _solar_export_bypass_is_unexecutable,
     select_action,
 )
@@ -307,6 +309,15 @@ def _pwl_candidate_values_block(
         # leaves is deliverable.
         ac_headroom_kwh = max(0.0, ac_cap_kwh - min(solar_production[t], ac_cap_kwh))
         max_discharge_power = np.minimum(max_discharge_power, ac_headroom_kwh / dt)
+    battery_to_grid_cap_kwh = _battery_to_grid_cap_kwh(battery_settings, dt)
+    if battery_to_grid_cap_kwh is not None:
+        # Same bound _discharge_candidates applies: only discharge beyond the
+        # load the battery still has to cover counts as export.
+        discharge_bound_kwh = (
+            _residual_load_kwh(home_consumption[t], solar_production[t], ac_cap_kwh)
+            + battery_to_grid_cap_kwh
+        )
+        max_discharge_power = np.minimum(max_discharge_power, discharge_bound_kwh / dt)
     affordable_discharge_power = (
         np.floor(max_discharge_power / rate_step + DISCHARGE_LATTICE_PCT_EPS)
         * rate_step

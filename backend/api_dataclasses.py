@@ -1155,6 +1155,8 @@ class APISetupCompletePayload(BaseModel):
     maxSoc: float | None = None
     maxChargePowerKw: float | None = None
     maxDischargePowerKw: float | None = None
+    maxBatteryToGridEnabled: bool | None = None
+    maxBatteryToGridPowerKw: float | None = None
     cycleCost: float | None = None
     # Home settings
     currency: str | None = None

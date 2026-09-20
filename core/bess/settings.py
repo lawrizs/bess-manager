@@ -151,6 +151,14 @@ class BatterySettings:
     # CT/smart meter and a platform with supports_export_limit_control.
     export_curtailment_enabled: bool = False
     export_curtailment_price_floor: float = 0.0
+    # Battery-to-grid export ceiling -- opt-in, and distinct from the home's
+    # grid_export_power_limit_kw, which bounds *total* feed-in (solar plus
+    # battery). This one bounds only the battery's share, for connections that
+    # allow solar export but restrict exporting stored energy. Unlike the other
+    # power limits, 0.0 is a meaningful setting -- "never export from the
+    # battery" -- so the flag is what enables it, never a non-zero value.
+    max_battery_to_grid_enabled: bool = False
+    max_battery_to_grid_power_kw: float = 0.0
     # VPP load tracking (#520) -- opt-in, Growatt VPP control mode only.
     # Requires a resolvable local load sensor; opting in without one is a
     # configuration error surfaced in health, never a quiet fall back to
@@ -170,6 +178,11 @@ class BatterySettings:
             raise ValueError(
                 f"inverter_max_ac_power_kw must be >= 0 (0 disables the AC cap), "
                 f"got {self.inverter_max_ac_power_kw}"
+            )
+        if self.max_battery_to_grid_power_kw < 0:
+            raise ValueError(
+                f"max_battery_to_grid_power_kw must be >= 0, "
+                f"got {self.max_battery_to_grid_power_kw}"
             )
         if not 0 <= self.inverter_ac_power_margin < 1:
             raise ValueError(

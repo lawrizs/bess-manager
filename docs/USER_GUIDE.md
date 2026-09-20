@@ -264,6 +264,7 @@ The logs show:
 
 - **Total Capacity**: Match your actual battery capacity exactly
 - **Min SOC**: Set safety margin (10-20% recommended)
+- **Limit battery export to grid** (optional): Caps how much power the *battery* may feed into the grid, for connections that allow solar export but restrict exporting stored energy. Set the cap to **0 kW** to stop the battery exporting entirely — it still discharges to cover your home load, it just never sends stored energy out. This is separate from Home → **Grid Export Limit**, which caps your *total* feed-in from solar and battery together; use that one if your DSO limits the connection as a whole. Because 0 is a meaningful value here, the switch is what turns the cap on, not a non-zero number.
 - **Max Charge Power** / **Max Discharge Power**: The power ceilings the optimizer plans within, in kW. Set them separately when your inverter charges and discharges at different rates; use the same value for both otherwise. Derive from your battery's C-rate — e.g. 30 kWh × 0.5C = 15 kW.
 - **Cycle Cost**: Balance between battery wear and optimization aggressiveness
 
