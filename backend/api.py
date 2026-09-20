@@ -3183,23 +3183,19 @@ async def setup_complete(payload: APISetupCompletePayload):
         # the guard and the write are both derived from it automatically.
 
         # --- battery ---
-        # maxChargeDischargePower maps to two store keys — handled separately below.
         _BATTERY_MAP = {
             "totalCapacity": "total_capacity",
             "minSoc": "min_soc",
             "maxSoc": "max_soc",
             "cycleCost": "cycle_cost_per_kwh",
+            "maxChargePowerKw": "max_charge_power_kw",
+            "maxDischargePowerKw": "max_discharge_power_kw",
         }
-        if any(getattr(payload, f) is not None for f in _BATTERY_MAP) or (
-            payload.maxChargeDischargePower is not None
-        ):
+        if any(getattr(payload, f) is not None for f in _BATTERY_MAP):
             battery = bess_controller.settings_store.get_section("battery")
             for field, key in _BATTERY_MAP.items():
                 if getattr(payload, field) is not None:
                     battery[key] = getattr(payload, field)
-            if payload.maxChargeDischargePower is not None:
-                battery["max_charge_power_kw"] = payload.maxChargeDischargePower
-                battery["max_discharge_power_kw"] = payload.maxChargeDischargePower
             sections["battery"] = battery
 
         # --- home ---
@@ -3353,8 +3349,8 @@ async def setup_complete(payload: APISetupCompletePayload):
                     "total_capacity": payload.totalCapacity,
                     "min_soc": payload.minSoc,
                     "max_soc": payload.maxSoc,
-                    "max_charge_power_kw": payload.maxChargeDischargePower,
-                    "max_discharge_power_kw": payload.maxChargeDischargePower,
+                    "max_charge_power_kw": payload.maxChargePowerKw,
+                    "max_discharge_power_kw": payload.maxDischargePowerKw,
                     "cycle_cost_per_kwh": payload.cycleCost,
                 }
             )

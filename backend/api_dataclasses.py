@@ -1153,7 +1153,8 @@ class APISetupCompletePayload(BaseModel):
     totalCapacity: float | None = None
     minSoc: float | None = None
     maxSoc: float | None = None
-    maxChargeDischargePower: float | None = None
+    maxChargePowerKw: float | None = None
+    maxDischargePowerKw: float | None = None
     cycleCost: float | None = None
     # Home settings
     currency: str | None = None

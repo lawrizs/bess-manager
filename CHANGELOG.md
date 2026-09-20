@@ -4,6 +4,16 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Separate maximum charge and discharge power** — Settings → Battery now has a **Max Charge Power** and a **Max Discharge Power** field instead of one combined limit, so an inverter that charges and discharges at different rates can be described accurately. Existing installs are unchanged: both fields start at the value the single field held.
+
+### Fixed
+
+- **The optimizer no longer plans against discharge power the battery does not have** — its backward pass evaluates actions on a lattice spanning the larger of the two power limits, and bounded discharge only by stored energy, not by the configured discharge limit. With one combined limit the two were always equal so nothing was wrong; once they can differ, a battery whose discharge limit is the smaller of the two would have had its value function computed assuming the larger. Executed plans were always within limits — the replay pass caps correctly — but they were chosen against an optimistic forecast. The charge side needed no equivalent fix: its transition is already bounded by the charge limit itself.
+
 ## [11.1.1-ls] - 2026-09-19
 
 ### Changed

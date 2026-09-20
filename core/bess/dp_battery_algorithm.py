@@ -1397,7 +1397,22 @@ def _run_dynamic_programming(
     charge_feasible_base = ~is_charge | (power_row <= max_charge_power)
 
     available_energy = soe_col - min_soe_kwh
-    max_discharge_power = available_energy / dt * battery_settings.efficiency_discharge
+    # Bounded by the configured discharge cap as well as by stored energy. The
+    # lattice spans max(charge, discharge) symmetrically
+    # (_discretize_state_action_space), so once the two caps differ it stops
+    # bounding the smaller side on its own, and this pass would value discharge
+    # the hardware cannot deliver. The replay pass has always capped it
+    # (_discharge_candidates), so plans stayed feasible; what leaked was V.
+    #
+    # The charge side needs no equivalent: STORE physics are binary in the
+    # power value -- _state_transition_grid bounds the transfer by
+    # `max_charge_power_kw * dt` itself, so lattice levels above the charge cap
+    # transition identically to the cap rather than over-charging. Masking them
+    # would remove duplicates, not wrong answers.
+    max_discharge_power = np.minimum(
+        available_energy / dt * battery_settings.efficiency_discharge,
+        battery_settings.max_discharge_power_kw,
+    )
     discharge_feasible = ~is_discharge | (np.abs(power_row) <= max_discharge_power)
 
     inverter_ac_cap_kwh = _effective_ac_cap_kwh(battery_settings, dt)
