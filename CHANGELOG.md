@@ -4,6 +4,12 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **"Re-optimize now" button on the Dashboard** — rebuilds the battery schedule immediately instead of waiting for the next quarter-hour run. Saving settings applies them to the running system at once but does not itself replan, so until now a changed cycle cost, price setting or power limit could sit up to 15 minutes before it reached the plan. The button runs the same optimization the scheduler does and waits for it, so when it returns the new schedule is genuinely in force; a failure is reported rather than leaving the old plan in place behind a green tick. Hidden when viewing a past day, which cannot be replanned.
+
 ## [11.2.0-ls] - 2026-09-20
 
 ### Added

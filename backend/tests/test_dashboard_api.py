@@ -613,6 +613,47 @@ class TestSystemHealthRecheck:
 
 
 # ===========================================================================
+# POST /api/schedule/reoptimize
+# ===========================================================================
+
+
+class TestScheduleReoptimize:
+    def test_rebuilds_the_schedule_for_the_current_period(self) -> None:
+        ctrl = _make_started_controller()
+        sys.modules["app"].bess_controller = ctrl  # type: ignore[attr-defined]
+
+        resp = _client.post("/api/schedule/reoptimize")
+
+        assert resp.status_code == 200
+        ctrl.system.update_battery_schedule.assert_called_once()
+        # Same call shape the quarterly scheduler job makes, so the manual
+        # path and the timed one cannot drift apart.
+        period = ctrl.system.update_battery_schedule.call_args.kwargs["current_period"]
+        assert 0 <= period <= 95
+
+    def test_unconfigured_returns_503(self) -> None:
+        sys.modules["app"].bess_controller = _unconfigured_controller()  # type: ignore[attr-defined]
+        resp = _client.post("/api/schedule/reoptimize")
+        assert resp.status_code == 503
+        # A system without settings must not be asked to plan at all.
+        assert not sys.modules[
+            "app"
+        ].bess_controller.system.update_battery_schedule.called
+
+    def test_a_failing_optimization_surfaces_as_500(self) -> None:
+        """The button must report failure rather than silently leaving the old
+        schedule in force with a green response."""
+        ctrl = _make_started_controller()
+        ctrl.system.update_battery_schedule.side_effect = RuntimeError("no prices")
+        sys.modules["app"].bess_controller = ctrl  # type: ignore[attr-defined]
+
+        resp = _client.post("/api/schedule/reoptimize")
+
+        assert resp.status_code == 500
+        assert "no prices" in resp.json()["detail"]
+
+
+# ===========================================================================
 # GET /api/dashboard-health-summary
 # ===========================================================================
 
