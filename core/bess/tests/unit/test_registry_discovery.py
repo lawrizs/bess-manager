@@ -247,6 +247,15 @@ def _solax_native_registry() -> list[dict]:
         _entity("sensor.solax_grid_export", "solax_modbus", "solax_grid_export"),
         _entity("sensor.solax_pv_power_1", "solax_modbus", "solax_pv_power_1"),
         _entity("sensor.solax_house_load", "solax_modbus", "solax_house_load"),
+        # Energy Dashboard virtual device. unique_id is
+        # f"{platform_name}_{key}" with platform_name = f"{hub._name} Energy
+        # Dashboard" (sensor.py unique_id property), so the suffix match runs
+        # against a name containing spaces — as it does in a real registry.
+        _entity(
+            "sensor.solax_energy_dashboard_home_consumption_energy",
+            "solax_modbus",
+            "SolaX Energy Dashboard_home_consumption_energy",
+        ),
         _entity(
             "select.solax_remotecontrol_power_control_mode",
             "solax_modbus",
@@ -1046,6 +1055,66 @@ class TestMapRegistryEntities:
             == "number.solax_battery_minimum_capacity_gridtied"
         )
         assert len(result) >= 10
+
+    def test_solax_native_energy_dashboard_consumption_mapped(self):
+        """SolaX has no load-consumption register, but solax_modbus's Energy
+        Dashboard virtual device computes one by Riemann-integrating
+        house_load into a TOTAL_INCREASING kWh sensor. Mapping it is what
+        makes the ha_statistics consumption strategy reachable here — without
+        it the wizard field stays blank and the strategy radio is disabled.
+        """
+        result, _disabled = self.ctrl._map_registry_entities(
+            _solax_native_registry(),
+            ["solax_modbus", "solax"],
+            self.ctrl.SOLAX_NATIVE_SUFFIX_MAP,
+        )
+        assert (
+            result["lifetime_load_consumption"]
+            == "sensor.solax_energy_dashboard_home_consumption_energy"
+        )
+
+    def test_solax_native_consumption_unmapped_without_energy_dashboard(self):
+        """The Energy Dashboard device is opt-in upstream
+        (DEFAULT_ENERGY_DASHBOARD_DEVICE = False), so the common install has no
+        such entity. Discovery must leave the key unmapped rather than binding
+        something else — get_load_consumption_lifetime() then falls back to
+        deriving it from the five lifetime counters.
+        """
+        registry = [
+            e
+            for e in _solax_native_registry()
+            if not e["unique_id"].endswith("_home_consumption_energy")
+        ]
+        result, disabled_only = self.ctrl._map_registry_entities(
+            registry, ["solax_modbus", "solax"], self.ctrl.SOLAX_NATIVE_SUFFIX_MAP
+        )
+        assert "lifetime_load_consumption" not in result
+        assert "lifetime_load_consumption" not in disabled_only
+
+    def test_solax_native_parallel_mode_aggregate_consumption_mapped(self):
+        """In parallel mode the Energy Dashboard prefixes the aggregate's key
+        ("all_home_consumption_energy") and, because the mapping sets
+        skip_pm_individuals=True, creates no per-inverter duplicates. The
+        suffix must still match that single aggregate entity.
+        """
+        registry = [
+            e
+            for e in _solax_native_registry()
+            if not e["unique_id"].endswith("_home_consumption_energy")
+        ] + [
+            _entity(
+                "sensor.solax_energy_dashboard_all_home_consumption_energy",
+                "solax_modbus",
+                "SolaX Energy Dashboard_all_home_consumption_energy",
+            )
+        ]
+        result, _disabled = self.ctrl._map_registry_entities(
+            registry, ["solax_modbus", "solax"], self.ctrl.SOLAX_NATIVE_SUFFIX_MAP
+        )
+        assert (
+            result["lifetime_load_consumption"]
+            == "sensor.solax_energy_dashboard_all_home_consumption_energy"
+        )
 
     def test_solax_native_ignores_off_grid_minimum_capacity(self):
         """The general/off-grid minimum-capacity entity must never be

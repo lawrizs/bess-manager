@@ -14,8 +14,10 @@ describe('lifetime_load_consumption field availability', () => {
   // wizard definition omits the field can never enable that strategy — even
   // when the user has a whole-home energy meter in HA (#730). Huawei/EMMA and
   // Solis both expose a real lifetime consumption entity, so both must offer
-  // the field.
-  it.each(['huawei_solar_luna2000', 'solis_modbus'])(
+  // the field. SolaX native has no load register, but solax_modbus's opt-in
+  // Energy Dashboard device computes an equivalent cumulative kWh sensor, so
+  // it must offer the field too.
+  it.each(['huawei_solar_luna2000', 'solis_modbus', 'solax_modbus_native'])(
     '%s exposes an optional lifetime_load_consumption field',
     (platformId) => {
       const platform = INTEGRATIONS.find((i) => i.id === platformId);
