@@ -819,10 +819,13 @@ class HomeAssistantAPIController:
         # Besides the ha_statistics forecast, the only reader is
         # get_load_consumption_lifetime(), whose value the Health page shows.
         #
-        # The mapping carries skip_pm_individuals=True, so parallel mode adds
-        # no per-inverter duplicates: only the aggregate exists, under the
-        # prefixed key "all_home_consumption_energy", which this suffix still
-        # matches. No ambiguity for _map_registry_entities to resolve.
+        # The key is always prefixed, so this suffix must match on the tail
+        # rather than the whole key. Standalone installs create the sensor with
+        # name_prefix=f"{inverter_name} " -> "solax_home_consumption_energy";
+        # parallel mode uses the "All " aggregate -> "all_home_consumption_
+        # energy", and adds no per-inverter duplicates because the mapping sets
+        # skip_pm_individuals=True. Either way exactly one entity matches, so
+        # there is no ambiguity for _map_registry_entities to resolve.
         "home_consumption_energy": "lifetime_load_consumption",
         # VPP control — mode 8 ("PV and BAT control - Duration"), not the
         # mode 1 remotecontrol_* family. Mode 1's select is data-only: the
