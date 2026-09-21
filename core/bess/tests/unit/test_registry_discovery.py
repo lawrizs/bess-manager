@@ -1056,7 +1056,7 @@ class TestMapRegistryEntities:
         )
         assert len(result) >= 10
 
-    def test_solax_native_energy_dashboard_consumption_mapped(self):
+    def test_solax_native_energy_dashboard_consumption_mapped(self) -> None:
         """SolaX has no load-consumption register, but solax_modbus's Energy
         Dashboard virtual device computes one by Riemann-integrating
         house_load into a TOTAL_INCREASING kWh sensor. Mapping it is what
@@ -1073,7 +1073,7 @@ class TestMapRegistryEntities:
             == "sensor.solax_energy_dashboard_home_consumption_energy"
         )
 
-    def test_solax_native_consumption_unmapped_without_energy_dashboard(self):
+    def test_solax_native_consumption_unmapped_without_energy_dashboard(self) -> None:
         """The Energy Dashboard device is opt-in upstream
         (DEFAULT_ENERGY_DASHBOARD_DEVICE = False), so the common install has no
         such entity. Discovery must leave the key unmapped rather than binding
@@ -1091,7 +1091,7 @@ class TestMapRegistryEntities:
         assert "lifetime_load_consumption" not in result
         assert "lifetime_load_consumption" not in disabled_only
 
-    def test_solax_native_parallel_mode_aggregate_consumption_mapped(self):
+    def test_solax_native_parallel_mode_aggregate_consumption_mapped(self) -> None:
         """In parallel mode the Energy Dashboard prefixes the aggregate's key
         ("all_home_consumption_energy") and, because the mapping sets
         skip_pm_individuals=True, creates no per-inverter duplicates. The
