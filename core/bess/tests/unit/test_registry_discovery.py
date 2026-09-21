@@ -247,14 +247,18 @@ def _solax_native_registry() -> list[dict]:
         _entity("sensor.solax_grid_export", "solax_modbus", "solax_grid_export"),
         _entity("sensor.solax_pv_power_1", "solax_modbus", "solax_pv_power_1"),
         _entity("sensor.solax_house_load", "solax_modbus", "solax_house_load"),
-        # Energy Dashboard virtual device. unique_id is
+        # Energy Dashboard virtual device, standalone (non-parallel) mode —
+        # the shape a real install actually has. unique_id is
         # f"{platform_name}_{key}" with platform_name = f"{hub._name} Energy
-        # Dashboard" (sensor.py unique_id property), so the suffix match runs
-        # against a name containing spaces — as it does in a real registry.
+        # Dashboard" (sensor.py unique_id property), so the match runs against
+        # a name containing spaces. The key itself is prefixed too: standalone
+        # creates the sensor with name_prefix=f"{inverter_name} "
+        # (energy_dashboard.py), making the key "solax_home_consumption_energy"
+        # rather than the bare target_key. Verified against a live registry.
         _entity(
-            "sensor.solax_energy_dashboard_home_consumption_energy",
+            "sensor.solax_energy_dashboard_solax_home_consumption_energy",
             "solax_modbus",
-            "SolaX Energy Dashboard_home_consumption_energy",
+            "SolaX Energy Dashboard_solax_home_consumption_energy",
         ),
         _entity(
             "select.solax_remotecontrol_power_control_mode",
@@ -1070,7 +1074,7 @@ class TestMapRegistryEntities:
         )
         assert (
             result["lifetime_load_consumption"]
-            == "sensor.solax_energy_dashboard_home_consumption_energy"
+            == "sensor.solax_energy_dashboard_solax_home_consumption_energy"
         )
 
     def test_solax_native_consumption_unmapped_without_energy_dashboard(self) -> None:
