@@ -4,11 +4,11 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [11.6.0-ls] - 2026-09-21
 
 ### Added
 
-- **SolaX: native load support** — a new opt-in toggle under **Settings → Battery → Advanced** (native SolaX only, default off). When the schedule plans to cover the house from the battery, BESS hands the period to the inverter's own self-use logic instead of commanding a fixed discharge rate, so the battery follows your *real* load rather than the forecast — a prediction miss stops turning into an unnecessary grid import or export. The optimizer also starts planning partial covers it previously could not deliver. Note that the inverter's own discharge stop-SOC applies while it is in control, exactly as it already does for idle and solar-charging periods.
+- **SolaX: native load support** — a new opt-in toggle under **Settings → Battery → Advanced** (native SolaX only, default off). When the schedule plans to cover the house from the battery, BESS hands the period to the inverter's own self-use logic instead of commanding a fixed discharge rate, so the battery follows your *real* load rather than the forecast — a prediction miss stops turning into an unnecessary grid import or export. The optimizer also starts planning partial covers it previously could not deliver. Note that the inverter's own discharge stop-SOC applies while it is in control, exactly as it already does for idle and solar-charging periods. ([#18](https://github.com/lawrizs/bess-manager/pull/18))
 
 ## [11.5.0-ls] - 2026-09-21
 
