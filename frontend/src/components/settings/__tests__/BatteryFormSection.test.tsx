@@ -19,7 +19,15 @@ const BASE_FORM: BatteryForm = {
   inverterAcPowerMargin: 0.05,
   exportCurtailmentEnabled: false,
   exportCurtailmentPriceFloor: 0,
+  solaxNativeLoadSupportEnabled: false,
 };
+
+const NATIVE_LOAD_SUPPORT = /Use native load support/i;
+
+/** The toggle lives in the collapsed "Advanced settings" block. */
+function openAdvanced() {
+  fireEvent.click(screen.getByRole('button', { name: /Advanced settings/i }));
+}
 
 describe('BatteryFormSection', () => {
   it('offers charge and discharge power as two separate fields', () => {
@@ -114,6 +122,67 @@ describe('BatteryFormSection', () => {
         maxChargePowerKw: 15,
         maxDischargePowerKw: 15,
       }),
+    );
+  });
+});
+
+describe('SolaX load-following toggle', () => {
+  it('is disabled on platforms other than native SolaX', () => {
+    render(
+      <BatteryFormSection
+        form={BASE_FORM}
+        onChange={vi.fn()}
+        inverterPlatform="growatt_server_min"
+      />,
+    );
+
+    openAdvanced();
+
+    expect(screen.getByRole('switch', { name: NATIVE_LOAD_SUPPORT })).toBeDisabled();
+  });
+
+  it('is editable on native SolaX', () => {
+    const onChange = vi.fn();
+    render(
+      <BatteryFormSection
+        form={BASE_FORM}
+        onChange={onChange}
+        inverterPlatform="solax_modbus_native"
+      />,
+    );
+
+    openAdvanced();
+
+    const control = screen.getByRole('switch', { name: NATIVE_LOAD_SUPPORT });
+    expect(control).toBeEnabled();
+
+    fireEvent.click(control);
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ solaxNativeLoadSupportEnabled: true }),
+    );
+  });
+
+  it('stays switchable off after a platform change, so nobody is stranded', () => {
+    // An already-enabled setting must remain clearable even once its platform
+    // is gone -- otherwise switching inverter traps the user with a setting
+    // they can see, cannot turn off, and which still drives DP planning.
+    const onChange = vi.fn();
+    render(
+      <BatteryFormSection
+        form={{ ...BASE_FORM, solaxNativeLoadSupportEnabled: true }}
+        onChange={onChange}
+        inverterPlatform="growatt_server_min"
+      />,
+    );
+
+    openAdvanced();
+
+    const control = screen.getByRole('switch', { name: NATIVE_LOAD_SUPPORT });
+    expect(control).toBeEnabled();
+
+    fireEvent.click(control);
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ solaxNativeLoadSupportEnabled: false }),
     );
   });
 });

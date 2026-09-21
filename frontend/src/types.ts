@@ -139,6 +139,9 @@ export interface BatterySettings {
   // PV export-limit curtailment (issue #269) — opt-in, requires a grid
   // CT/smart meter and a platform with export-limit register support.
   exportCurtailmentEnabled: boolean;
+  /** Native SolaX only: serve LOAD_SUPPORT periods from the inverter's own
+   * self-use load-following instead of forcing a discharge rate. */
+  solaxNativeLoadSupportEnabled: boolean;
   exportCurtailmentPriceFloor: number; // SEK/kWh — curtail below this sell price
 
   // Consumption estimate
