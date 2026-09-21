@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceArea, Customized } from 'recharts';
-import { HourlyData, FormattedValue } from '../types';
+import { HourlyData, FormattedValue, EnergyFlowLineStyle } from '../types';
 import { periodToTimeRange } from '../utils/timeUtils';
 import { DataResolution } from '../hooks/useUserPreferences';
 import { toggle } from './settings/FormHelpers';
@@ -165,7 +165,11 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
   resolution: DataResolution;
   showSellPrice: boolean;
   onShowSellPriceChange: (show: boolean) => void;
-}> = ({ dailyViewData, tomorrowData, resolution, showSellPrice, onShowSellPriceChange }) => {
+  /** Curve type for every series, from Settings → System. Defaults to 'step'
+   * so a caller that has not loaded settings yet renders the same shape the
+   * stored default produces, rather than flipping once settings arrive. */
+  lineStyle?: EnergyFlowLineStyle;
+}> = ({ dailyViewData, tomorrowData, resolution, showSellPrice, onShowSellPriceChange, lineStyle = 'step' }) => {
   
   // Helper function to get currency unit from price data
   const getCurrencyUnit = () => {
@@ -208,8 +212,14 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
     return field || 0;
   };
 
-  // Map each period to a chart data point positioned at the START of its hour
-  // Period END positioning + stepBefore + zero anchor: bar fills correct slot, tooltip at period end
+  // Map each period to a chart data point positioned at the CENTRE of its
+  // period. That is what makes type="step" correct for every series: d3's
+  // curveStep transitions halfway between adjacent points, and halfway
+  // between two period centres is exactly the period boundary -- so each
+  // period renders as a flat plateau spanning precisely its own width.
+  // stepBefore/stepAfter would shift every plateau half a period off, since
+  // those assume the point marks an interval edge rather than its middle.
+  // Centres also keep the tooltip snapping to the period the cursor is over.
   const numDataPoints = dailyViewData?.length || 24;
   const chartData: any[] = Array.from({ length: numDataPoints }, (_, index) => {
     const dailyViewHour = dailyViewData?.[index];
@@ -315,8 +325,10 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
     }
   }
 
-  // Compute max hour for X-axis domain
-  // Period 23 is at x=24, so today-only maxHour is naturally 24
+  // Compute max hour for X-axis domain.
+  // Period 23 is centred at x=23.5 and its right boundary is 24, so a
+  // today-only domain naturally ends at 24 even though no data point sits
+  // there.
   const maxHour = hasTomorrowData
     ? Math.ceil(Math.max(...chartData.map(d => d.hour)))
     : 24;
@@ -511,7 +523,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
 
             {/* ENERGY SOURCES - Single series, style by isActual */}
             <Area
-              type="monotone"
+              type={lineStyle}
               dataKey="solar"
               stackId="sources"
               stroke={colors.solar}
@@ -523,7 +535,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
               connectNulls
             />
             <Area
-              type="monotone"
+              type={lineStyle}
               dataKey="batteryOut"
               stackId="sources"
               stroke={colors.battery}
@@ -535,7 +547,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
               connectNulls
             />
             <Area
-              type="monotone"
+              type={lineStyle}
               dataKey="gridIn"
               stackId="sources"
               stroke={colors.grid}
@@ -557,7 +569,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
                 so actual-vs-planned reads at a glance. An overlay-free
                 install is all residual, unchanged. */}
             <Area
-              type="monotone"
+              type={lineStyle}
               dataKey="homeResidual"
               stackId="consumption"
               stroke={colors.home}
@@ -569,7 +581,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
               connectNulls
             />
             <Area
-              type="monotone"
+              type={lineStyle}
               dataKey="homePlanned"
               stackId="consumption"
               stroke={colors.homePlanned}
@@ -584,7 +596,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
                 ForecastOutline (a Customized layer) draws the actual visual
                 mark, but isn't a data series recharts' Tooltip knows about. */}
             <Line
-              type="monotone"
+              type={lineStyle}
               dataKey="forecastTotal"
               stroke={colors.homePlanned}
               strokeWidth={0}
@@ -597,7 +609,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
             />
             <Customized component={ForecastOutline} />
             <Area
-              type="monotone"
+              type={lineStyle}
               dataKey="batteryIn"
               stackId="consumption"
               stroke={colors.battery}
@@ -609,7 +621,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
               connectNulls
             />
             <Area
-              type="monotone"
+              type={lineStyle}
               dataKey="gridOut"
               stackId="consumption"
               stroke={colors.gridExport}
@@ -652,7 +664,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
 
             {/* Price line on secondary Y-axis */}
             <Line
-              type="monotone"
+              type={lineStyle}
               dataKey="price"
               yAxisId="price"
               stroke="#9CA3AF"
@@ -663,7 +675,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
             />
             {showSellPrice && (
               <Line
-                type="monotone"
+                type={lineStyle}
                 dataKey="sell"
                 yAxisId="price"
                 stroke="#f59e0b"

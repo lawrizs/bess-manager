@@ -45,7 +45,11 @@ from core.bess.health_check import (
 from core.bess.influxdb_helper import is_influxdb_configured
 from core.bess.savings_aggregator import DEFAULT_COUNTS, build_buckets
 from core.bess.settings import canonicalize_consumption_strategy
-from core.bess.settings_store import VALID_PLATFORMS, flatten_sensors
+from core.bess.settings_store import (
+    ENERGY_FLOW_LINE_STYLES,
+    VALID_PLATFORMS,
+    flatten_sensors,
+)
 from core.bess.time_utils import get_period_count
 
 router = APIRouter()
@@ -168,6 +172,25 @@ def _validate_power_monitoring_sensors(
 _CONSUMPTION_STRATEGIES = ("fixed", "sensor", "load_power_7d_avg", "ha_statistics")
 
 
+def _validate_dashboard_section(section: dict) -> None:
+    """Raise HTTPException(422) for an unknown Energy Flow curve type.
+
+    The value is handed straight to recharts as its `type` prop. An unknown
+    string there does not error -- recharts silently falls back -- so an
+    invalid value would persist and quietly do nothing rather than surface.
+    Reject it at the boundary instead.
+    """
+    style = section.get("energy_flow_line_style")
+    if style not in ENERGY_FLOW_LINE_STYLES:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Invalid energy_flow_line_style: {style!r}. "
+                f"Expected one of {list(ENERGY_FLOW_LINE_STYLES)}."
+            ),
+        )
+
+
 def _validate_consumption_strategy(home_section: dict, active_sensors: dict) -> None:
     """Raise HTTPException(422) for a consumption strategy that cannot work.
 
@@ -284,6 +307,7 @@ _SECTION_MAP: dict[str, str] = {
     "sensors": "sensors",
     "aiAnalyst": "ai_analyst",
     "demoMode": "demo_mode",
+    "dashboard": "dashboard",
 }
 
 
@@ -404,6 +428,9 @@ async def patch_settings(updates: dict):
             # Validate power-monitoring sensor requirements BEFORE persisting —
             # must run ahead of save_section so an invalid combination is never
             # written to disk, even though the client still gets a 422.
+            if store_key == "dashboard":
+                _validate_dashboard_section(section)
+
             if store_key == "home":
                 effective_sensors = {
                     **bess_controller.settings_store.get_active_sensors(),
