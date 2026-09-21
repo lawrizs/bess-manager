@@ -46,6 +46,7 @@ const EMPTY_BATTERY: BatteryForm = {
   temperatureDeratingEnabled: false,
   inverterMaxAcPowerKw: 0, inverterAcPowerMargin: 0.05,
   exportCurtailmentEnabled: false, exportCurtailmentPriceFloor: 0,
+  solaxNativeLoadSupportEnabled: false,
 };
 const EMPTY_HOME: HomeForm = {
   consumption: 3.5, consumptionStrategy: 'fixed',
@@ -189,6 +190,7 @@ const SettingsPage: React.FC = () => {
         inverterMaxAcPowerKw: bat_s.inverterMaxAcPowerKw ?? 0,
         inverterAcPowerMargin: bat_s.inverterAcPowerMargin ?? 0.05,
         exportCurtailmentEnabled: bat_s.exportCurtailmentEnabled ?? false,
+        solaxNativeLoadSupportEnabled: bat_s.solaxNativeLoadSupportEnabled ?? false,
         exportCurtailmentPriceFloor: bat_s.exportCurtailmentPriceFloor ?? 0,
       };
       setBatteryForm(bat);
@@ -512,6 +514,7 @@ const SettingsPage: React.FC = () => {
           inverterMaxAcPowerKw: batteryForm.inverterMaxAcPowerKw,
           inverterAcPowerMargin: batteryForm.inverterAcPowerMargin,
           exportCurtailmentEnabled: batteryForm.exportCurtailmentEnabled,
+          solaxNativeLoadSupportEnabled: batteryForm.solaxNativeLoadSupportEnabled,
           exportCurtailmentPriceFloor: batteryForm.exportCurtailmentPriceFloor,
           temperatureDerating: {
             enabled: batteryForm.temperatureDeratingEnabled,
@@ -734,6 +737,7 @@ const SettingsPage: React.FC = () => {
               onChange={setBatteryForm}
               currency={pricingForm.currency}
               weatherEntity={sensors.shared?.['weather_entity']}
+              inverterPlatform={inverterForm.inverterPlatform}
             />
           )}
 

@@ -18,6 +18,9 @@ export interface BatteryForm {
   inverterAcPowerMargin: number;
   exportCurtailmentEnabled: boolean;
   exportCurtailmentPriceFloor: number;
+  /** Native SolaX only: hand LOAD_SUPPORT periods to the inverter's own
+   * self-use load-following instead of forcing a discharge rate. */
+  solaxNativeLoadSupportEnabled: boolean;
 }
 
 interface Props {
@@ -25,14 +28,18 @@ interface Props {
   onChange: (f: BatteryForm) => void;
   currency?: string;
   weatherEntity?: string;
+  /** Active inverter platform id. Gates the platform-specific toggles below. */
+  inverterPlatform?: string;
   /** Hide the advanced settings section (efficiency, derating). Used by the wizard. */
   hideAdvanced?: boolean;
 }
 
 export function BatteryFormSection({
-  form, onChange, currency = '', weatherEntity = '', hideAdvanced = false,
+  form, onChange, currency = '', weatherEntity = '', inverterPlatform = '',
+  hideAdvanced = false,
 }: Props) {
   const [effOpen, setEffOpen] = useState(false);
+  const isSolaxNative = inverterPlatform === 'solax_modbus_native';
 
   return (
     <div className="space-y-3">
@@ -147,6 +154,24 @@ export function BatteryFormSection({
               floor and the inverter is still exporting, the export-limit register throttles
               PV production at the panel instead of paying to export. Unsupported platforms
               ignore this setting.
+            </p>
+            {!isSolaxNative && (
+              <p className="text-xs text-amber-600 dark:text-amber-400">
+                The setting below applies to native SolaX inverters
+                (solax_modbus_native) only.
+              </p>
+            )}
+            {toggle('Use native load support (SolaX)', form.solaxNativeLoadSupportEnabled,
+              v => onChange({ ...form, solaxNativeLoadSupportEnabled: v }),
+              { disabled: !form.solaxNativeLoadSupportEnabled && !isSolaxNative })}
+            <p className="text-xs text-gray-500 dark:text-gray-400 -mt-2">
+              When the schedule plans to cover the house from the battery, hand the period
+              to the inverter's own self-use logic instead of commanding a fixed discharge
+              rate. The battery then follows your <em>actual</em> load rather than the
+              forecast, so a prediction miss stops turning into an unnecessary grid import
+              or export &mdash; and the optimizer plans partial covers it previously could
+              not deliver. Note the inverter's own discharge stop-SOC applies while it is
+              in control, as it already does for idle and solar-charging periods.
             </p>
             {toggle('Enable temperature derating', form.temperatureDeratingEnabled,
               v => onChange({ ...form, temperatureDeratingEnabled: v }))}

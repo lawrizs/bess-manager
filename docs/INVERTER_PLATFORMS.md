@@ -489,6 +489,33 @@ autorepeat cycle (`ap_target = target - pv_power`).
 
 **Idle/solar mode:** Disables VPP, inverter reverts to self-use.
 
+#### Native load support — *(optional, opt-in)*
+
+By default a `LOAD_SUPPORT` period writes a forced
+`-(rate% × max_discharge_W)`, so the battery discharges at the commanded rate
+whatever the house is really drawing — every load-forecast miss becomes an
+unnecessary grid import or export.
+
+`BatterySettings.solax_native_load_support_enabled` (Settings → Battery →
+Advanced, default off) ports the trade Growatt VPP made in #413 to this
+platform: a `LOAD_SUPPORT` period disables VPP instead, handing the period to
+the inverter's own self-use load-following so it covers the *actual* deficit.
+
+The toggle is not only a write change. The controller's
+`load_support_delivers_exact_cover` follows it, so the optimizer may plan an
+off-lattice partial load cover (`action_selector._residual_cover_p`) exactly
+when the inverter can deliver one. `discharge_rate_is_load_following` stays
+`False` either way — `BATTERY_EXPORT` still writes a forced watt target
+through the same path, and the intra-period discharge gate stays off.
+
+Two things to know before enabling:
+
+- While the inverter is in control, its **own** `discharge_stop_soc` applies,
+  not the configured `min_soc` — BESS does not write that register in VPP
+  mode. This is the same exposure `IDLE` and `SOLAR_STORAGE` already carry
+  here, since both already hand over; the toggle extends it to a third intent.
+- Not yet confirmed against real hardware, which is why it ships opt-in.
+
 ### Solis — `solis_modbus`
 
 Solis hybrids, connected via the community

@@ -273,7 +273,7 @@ class PlatformCapabilities:
       `discharge_rate_semantics` -- one of the three constants above. This is
         about the *rate register*: what a number written into it does.
       `load_support_delivers_exact_cover` -- a different question, with a
-        different answer on one platform: is a planned LOAD_SUPPORT discharge
+        different answer on some platforms: is a planned LOAD_SUPPORT discharge
         delivered as `min(plan, actual load)`? That is what the off-lattice
         exact-cover candidate needs (`action_selector._residual_cover_p`).
         On solax-modbus Growatt in VPP mode the rate register is a forced
@@ -281,9 +281,13 @@ class PlatformCapabilities:
         LOAD_SUPPORT never writes a rate there: #413 disables remote control
         for that intent and hands the period back to the inverter's own
         load-following self-use (`_intent_to_vpp`). A cover plan is delivered
-        exactly, so this stays True. Native SolaX never received #413 (gap
-        note in `solax_controller._vpp_display_state`), so its LOAD_SUPPORT
-        really is a forced `-(rate% x max_discharge)` and it is False.
+        exactly, so this stays True. Native SolaX can do the same, but only on
+        request: its LOAD_SUPPORT is a forced `-(rate% x max_discharge)`
+        unless `BatterySettings.solax_native_load_support_enabled` is set, so
+        it declares this as a property following that flag rather than as a
+        constant (`SolaxController.load_support_delivers_exact_cover`). Both
+        hand-over configurations are pinned by
+        `test_control_model_classification.py`.
       `control_model` -- the controller's `CONTROL_MODEL`, carried so 4b can
         derive the command without reaching back to a controller class.
       `intent_to_mode` -- the mode vocabulary (read-only).

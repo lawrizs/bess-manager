@@ -74,6 +74,7 @@ const SetupWizardPage: React.FC = () => {
     inverterMaxAcPowerKw: 0,
     inverterAcPowerMargin: 0.05,
     exportCurtailmentEnabled: false,
+    solaxNativeLoadSupportEnabled: false,
     exportCurtailmentPriceFloor: 0,
   });
 

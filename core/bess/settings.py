@@ -159,6 +159,18 @@ class BatterySettings:
     # battery" -- so the flag is what enables it, never a non-zero value.
     max_battery_to_grid_enabled: bool = False
     max_battery_to_grid_power_kw: float = 0.0
+    # Native load support -- opt-in, solax_modbus_native only.
+    # Hands a LOAD_SUPPORT period to the inverter's own self-use
+    # load-following (VPP disabled) instead of forcing
+    # -(rate% x max_discharge), the same trade #413 made for Growatt VPP: the
+    # inverter covers the *actual* deficit rather than the forecast one, so a
+    # load-prediction miss stops becoming a grid import/export.
+    #
+    # It is a planning fact as much as a write fact: the controller's
+    # load_support_delivers_exact_cover follows this flag, so the DP may
+    # enumerate the off-lattice exact-cover candidate only where native load
+    # support is actually on. Other platforms ignore it -- see SolaxController.
+    solax_native_load_support_enabled: bool = False
     # VPP load tracking (#520) -- opt-in, Growatt VPP control mode only.
     # Requires a resolvable local load sensor; opting in without one is a
     # configuration error surfaced in health, never a quiet fall back to

@@ -353,6 +353,7 @@ _BATTERY_OPTIONAL_FIELDS = frozenset(
         "export_curtailment_price_floor",
         "max_battery_to_grid_enabled",
         "max_battery_to_grid_power_kw",
+        "solax_native_load_support_enabled",
         "vpp_load_tracking_enabled",
         "vpp_load_tracking_tick_seconds",
     }

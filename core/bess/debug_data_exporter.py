@@ -574,6 +574,17 @@ class DebugDataAggregator:
             settings["export_curtailment_active"] = (
                 self.system.export_curtailment_active
             )
+            # Same idea for native load support on SolaX: the stored
+            # bit says what the user asked for, this says whether the active
+            # platform actually honours it -- and it is also the flag that
+            # decides whether the DP could plan an exact load cover, so a
+            # bundle is unreadable without it.
+            controller = self.system._inverter_controller
+            settings["load_support_delivers_exact_cover"] = (
+                controller.load_support_delivers_exact_cover
+                if controller is not None
+                else None
+            )
             return settings
         except Exception as e:
             logger.warning("Failed to serialize battery settings: %s", e)

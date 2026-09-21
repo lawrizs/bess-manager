@@ -19,7 +19,10 @@ Control model:
 Intent-to-power mapping:
 - GRID_CHARGING    → +(rate% x max_charge_W)  (charge at the plan's rate, #754)
 - SOLAR_STORAGE    → disable VPP      (let solar charge naturally)
-- LOAD_SUPPORT     -> -(rate% x max_discharge_W)  (discharge to cover load)
+- LOAD_SUPPORT     -> -(rate% x max_discharge_W)  (discharge to cover load), or
+  disable VPP when ``solax_native_load_support_enabled`` is set, handing the
+  period to the inverter's own self-use load-following so it covers the actual
+  deficit instead of the forecast one (the #413 trade, opt-in here)
 - BATTERY_EXPORT -> -max_discharge_W (full discharge for export)
 - IDLE             → disable VPP      (no battery action)
 """
@@ -58,13 +61,42 @@ class SolaxController(InverterController):
     # never a load-following ceiling. See #324.
     discharge_rate_is_load_following: ClassVar[bool] = False
 
-    # LOAD_SUPPORT is a forced -(rate% x max_discharge) here: SolaX never
-    # received the #413 remote-control release that makes solax_modbus's VPP
-    # mode load-follow that intent (see _vpp_display_state's gap note), so a
-    # planned partial cover is NOT delivered as min(plan, actual load).
-    load_support_delivers_exact_cover: ClassVar[bool] = False
-
     CONTROL_MODEL: ClassVar[str] = "vpp_power"
+
+    # mypy: "Cannot override writeable attribute with read-only property" --
+    # the base declares this as a ClassVar and there is no way to narrow one to
+    # a read-only property. The three capability properties on
+    # SolaxModbusGrowattController (:152, :159, :173) are the same shape and
+    # carry the same error in the baseline; nothing assigns to it.
+    @property
+    def load_support_delivers_exact_cover(self) -> bool:  # type: ignore[override]
+        """Is a planned LOAD_SUPPORT discharge delivered as
+        `min(plan, actual load)`? Only when native load support is opted into.
+
+        By default LOAD_SUPPORT is a forced `-(rate% x max_discharge)` here,
+        so a partial cover is delivered at the commanded rate whatever the
+        house is really drawing -- the DP must not plan one.
+        `solax_native_load_support_enabled` ports #413's trade to this
+        platform: the period is handed to the inverter's own self-use
+        load-following and *no rate is written at all*, so a cover plan is
+        delivered exactly and the off-lattice candidate becomes legal.
+
+        A property rather than a ClassVar because the answer is a user
+        setting, read live off the `BatterySettings` instance BSM shares with
+        this controller. `PlatformCapabilities.from_controller` reads this by
+        plain attribute access and `BatterySystemManager.platform_capabilities`
+        rebuilds on every access, so the next optimization sees a change with
+        no reconstruction. Same shape as
+        `SolaxModbusGrowattController.discharge_rate_is_load_following`, which
+        is likewise settings-derived.
+
+        Deliberately NOT paired with a change to
+        `discharge_rate_is_load_following`: that asks whether a *written* rate
+        is a ceiling, and BATTERY_EXPORT still writes a forced watt target
+        through the same path either way. Conflating the two was caught in
+        review once already -- see `execution_model.PlatformCapabilities`.
+        """
+        return self.battery_settings.solax_native_load_support_enabled
 
     def __init__(self, battery_settings: BatterySettings) -> None:
         """Initialise the SolaX controller."""
@@ -124,13 +156,22 @@ class SolaxController(InverterController):
     ) -> tuple[bool, str]:
         """Write period control settings to hardware.
 
-        Overrides the base class only to thread `charge_rate` through to
-        `_write_period_to_hardware` -- the base `apply_period` doesn't pass
-        it on, since register-based platforms realize the rate via a
-        separate register instead (see `apply_period`'s own docstring).
+        Overrides the base class only to thread `charge_rate` and
+        `strategic_intent` through to `_write_period_to_hardware` -- the base
+        `apply_period` passes on neither, since register-based platforms
+        realize the rate via a separate register instead and have no intent to
+        distinguish (see `apply_period`'s own docstring). The intent is needed
+        here because `grid_charge`/`discharge_rate` collapse LOAD_SUPPORT and
+        BATTERY_EXPORT to the same values, and only the former may be
+        handed over.
         """
         return self._write_period_to_hardware(
-            controller, grid_charge, discharge_rate, block_passive_charging, charge_rate
+            controller,
+            grid_charge,
+            discharge_rate,
+            block_passive_charging,
+            charge_rate,
+            strategic_intent,
         )
 
     def _write_period_to_hardware(
@@ -140,6 +181,7 @@ class SolaxController(InverterController):
         discharge_rate: int,
         block_passive_charging: bool = False,
         charge_rate: int = 100,
+        strategic_intent: str = "",
     ) -> tuple[bool, str]:
         """Issue a SolaX VPP command for the current period.
 
@@ -149,6 +191,11 @@ class SolaxController(InverterController):
         - ``grid_charge=True``  → charge at `charge_rate` (#754), the plan's
           action-derived rate.
         - ``grid_charge=False, discharge_rate=0`` → disable VPP (IDLE / SOLAR_STORAGE).
+        - ``grid_charge=False, intent=LOAD_SUPPORT`` with native load support on
+          → disable VPP, handing the period to the inverter's own self-use
+          load-following so it covers the actual deficit rather than the
+          forecast one. The rate is discarded, not scaled -- which is what
+          lets `load_support_delivers_exact_cover` be True.
         - ``grid_charge=False, discharge_rate>0`` → discharge at the given rate.
 
         ``block_passive_charging`` is accepted but currently unused: unlike
@@ -170,12 +217,21 @@ class SolaxController(InverterController):
                 time. See InverterController.apply_period's docstring for
                 why only the caller can supply this correctly, including on
                 a retry.
+            strategic_intent: The period's intent. Needed because
+                grid_charge/discharge_rate collapse LOAD_SUPPORT and
+                BATTERY_EXPORT to the same values and only the former is
+                eligible for native load support -- the same reason #413
+                threaded it for Growatt VPP.
 
         Returns:
             Tuple of (success, error_message). error_message is empty on success.
         """
+        use_native_load_support = (
+            strategic_intent == "LOAD_SUPPORT"
+            and self.battery_settings.solax_native_load_support_enabled
+        )
         try:
-            if not grid_charge and discharge_rate == 0:
+            if not grid_charge and (discharge_rate == 0 or use_native_load_support):
                 controller.set_solax_vpp_disabled()
             elif grid_charge:
                 target_watts = int(self.max_charge_power_kw * charge_rate / 100 * 1000)
@@ -200,18 +256,22 @@ class SolaxController(InverterController):
         charge_rate: int = 100,
     ) -> tuple[int, bool]:
         """Map (grid_charge, discharge_rate) to (power_pct, remote_control_enabled)
-        for display, mirroring _write_period_to_hardware()'s three branches
-        exactly. Unlike SolaxModbusGrowattController._intent_to_vpp(), this
-        ignores block_passive_charging and strategic_intent -- SolaX's
-        actual hardware write logic doesn't use them either (see the
-        TODO.md gap note: SolaX never received the #355/#413 Growatt VPP
-        fixes, so its real behavior for SOLAR_EXPORT/LOAD_SUPPORT differs).
-        The extra parameters exist only so the base class's
-        _mode_display_fields() can call _vpp_display_state() with a single
-        unified signature across all vpp_power controllers -- they do not
-        change SolaxController's own behavior. at_reserve_floor (#592) is in
-        that same category: native SolaX never received the Growatt VPP IDLE
-        hold (#466) that #592 releases, so there is nothing here to release.
+        for display, mirroring _write_period_to_hardware()'s branches exactly.
+
+        `strategic_intent` is read for the same reason the write path reads
+        it: with `solax_native_load_support_enabled` on, LOAD_SUPPORT is
+        handed to the inverter rather than commanded, and a display that
+        still reported `-rate%` would show a period the inverter was never
+        told to run.
+
+        `block_passive_charging` is still ignored, because the write path
+        ignores it too -- SolaX never received the #355 Growatt VPP fix, so
+        its real SOLAR_EXPORT behaviour differs and there is nothing here to
+        mirror. at_reserve_floor (#592) is in that same category: native SolaX
+        never received the Growatt VPP IDLE hold (#466) that #592 releases, so
+        there is nothing here to release. Both stay in the signature only so
+        the base class's _mode_display_fields() can call _vpp_display_state()
+        uniformly across all vpp_power controllers.
 
         charge_rate (#754) is NOT in that category: unlike the others, it
         does change what this reports, mirroring how _write_period_to_hardware
@@ -223,7 +283,11 @@ class SolaxController(InverterController):
             percent of max charge/discharge power, matching discharge_rate's
             own convention (not raw watts).
         """
-        if not grid_charge and discharge_rate == 0:
+        use_native_load_support = (
+            strategic_intent == "LOAD_SUPPORT"
+            and self.battery_settings.solax_native_load_support_enabled
+        )
+        if not grid_charge and (discharge_rate == 0 or use_native_load_support):
             return 0, False
         if grid_charge:
             return charge_rate, True
