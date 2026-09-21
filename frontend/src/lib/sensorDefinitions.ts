@@ -229,6 +229,13 @@ export const INTEGRATIONS: IntegrationDef[] = [
           { key: 'lifetime_solar_energy', label: 'Total Solar Energy', required: true },
           { key: 'lifetime_import_from_grid', label: 'Grid Import Total', required: true },
           { key: 'lifetime_export_to_grid', label: 'Grid Export Total', required: true },
+          // Not a modbus register: solax_modbus's Energy Dashboard virtual
+          // device integrates the house-load register into a cumulative kWh
+          // sensor. Enable "Energy Dashboard Virtual Device" in the
+          // integration's options to get it. Optional like every other
+          // platform's, but it is the only entity on this platform that can
+          // unlock the HA Statistics consumption strategy.
+          { key: 'lifetime_load_consumption', label: 'Home Consumption Energy', required: false },
         ],
       },
       {

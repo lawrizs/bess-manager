@@ -840,7 +840,21 @@ GEN4 above (`limit_grid_export` / `grid_export_limit`, registers 122/123) —
 | `lifetime_import_from_grid` | `grid_import_total` | |
 | `lifetime_export_to_grid` | `grid_export_total` | |
 | `lifetime_system_production` | `total_yield` | Register 0x52, "Total Yield" (production) |
-| `lifetime_load_consumption` | — | **No native register.** BESS derives it — see [Derived load consumption](#derived-load-consumption) |
+| `lifetime_load_consumption` | `home_consumption_energy` | **No native register.** Provided by solax_modbus's opt-in Energy Dashboard virtual device, which Riemann-integrates the `house_load` register into a cumulative kWh sensor (`device_class: energy`, `state_class: total_increasing`). Enable **Energy Dashboard Virtual Device** in the integration's options, then re-run discovery. Left unmapped, BESS derives the value instead — see [Derived load consumption](#derived-load-consumption) |
+
+> **Why map it at all if BESS can derive it?** The derived value is computed
+> from the five lifetime counters at read time; it is not an entity, so Home
+> Assistant keeps no long-term statistics for it. The `ha_statistics`
+> consumption strategy queries the recorder's hourly statistics for a real
+> `statistic_id`, so on this platform that strategy is reachable only with the
+> Energy Dashboard sensor mapped.
+>
+> Mapping it does **not** affect daily energy flows: `SensorCollector` reads
+> only the five core counters plus `battery_soc`, and `EnergyFlowCalculator`
+> always derives load consumption from those (`_calculate_derived_flows`). The
+> only other reader is `get_load_consumption_lifetime()`, which the Health page
+> displays — that value switches from the derived balance to the direct
+> reading, and the two will differ slightly.
 
 **VPP control (required for SolaX):**
 

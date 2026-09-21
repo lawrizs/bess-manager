@@ -799,7 +799,31 @@ class HomeAssistantAPIController:
         "grid_import_total": "lifetime_import_from_grid",
         "grid_export_total": "lifetime_export_to_grid",
         "total_yield": "lifetime_system_production",  # register 0x52, "Total Yield" (production)
-        # No native register for lifetime_load_consumption
+        # No native load-consumption register, but solax_modbus can compute
+        # one: its Energy Dashboard virtual device publishes "Home Consumption
+        # Energy" (plugin_solax.py ENERGY_DASHBOARD_MAPPING), a trapezoidal
+        # Riemann integration of the house_load register carrying
+        # device_class=ENERGY / state_class=TOTAL_INCREASING / kWh
+        # (energy_dashboard.py, is_energy_sensor branch). That is what HA needs
+        # to keep long-term statistics, so mapping it here is what lets the
+        # ha_statistics consumption strategy run on this platform.
+        #
+        # Opt-in: DEFAULT_ENERGY_DASHBOARD_DEVICE is False upstream, so most
+        # installs have no such entity and this key simply stays unmapped —
+        # get_load_consumption_lifetime() then derives it from the five
+        # counters as before.
+        #
+        # Mapping it does not disturb daily energy flows: SensorCollector
+        # collects only the five core counters plus battery_soc, and
+        # EnergyFlowCalculator always derives load_consumption from those.
+        # Besides the ha_statistics forecast, the only reader is
+        # get_load_consumption_lifetime(), whose value the Health page shows.
+        #
+        # The mapping carries skip_pm_individuals=True, so parallel mode adds
+        # no per-inverter duplicates: only the aggregate exists, under the
+        # prefixed key "all_home_consumption_energy", which this suffix still
+        # matches. No ambiguity for _map_registry_entities to resolve.
+        "home_consumption_energy": "lifetime_load_consumption",
         # VPP control — mode 8 ("PV and BAT control - Duration"), not the
         # mode 1 remotecontrol_* family. Mode 1's select is data-only: the
         # integration recomputes a GRID setpoint from the target every

@@ -4,6 +4,12 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **SolaX inverters can now use the HA Statistics consumption forecast** — SolaX has no lifetime load-consumption register, so that strategy was permanently greyed out on this platform. The `solax_modbus` integration can compute one: enable **Energy Dashboard Virtual Device** in its options and it publishes a "Home Consumption Energy" sensor, integrating the house-load register into a cumulative kWh total that Home Assistant keeps statistics for. BESS now discovers that entity and offers a **Home Consumption Energy** field under Sensors → Lifetime Energy. Optional, and it does not change how energy flows are computed — those are always derived from the five lifetime counters.
+
 ## [11.3.0-ls] - 2026-09-20
 
 ### Added
