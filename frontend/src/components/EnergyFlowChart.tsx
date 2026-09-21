@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceArea, Customized } from 'recharts';
-import { HourlyData, FormattedValue } from '../types';
+import { HourlyData, FormattedValue, EnergyFlowLineStyle } from '../types';
 import { periodToTimeRange } from '../utils/timeUtils';
 import { DataResolution } from '../hooks/useUserPreferences';
 import { toggle } from './settings/FormHelpers';
@@ -165,7 +165,11 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
   resolution: DataResolution;
   showSellPrice: boolean;
   onShowSellPriceChange: (show: boolean) => void;
-}> = ({ dailyViewData, tomorrowData, resolution, showSellPrice, onShowSellPriceChange }) => {
+  /** Curve type for every series, from Settings → System. Defaults to 'step'
+   * so a caller that has not loaded settings yet renders the same shape the
+   * stored default produces, rather than flipping once settings arrive. */
+  lineStyle?: EnergyFlowLineStyle;
+}> = ({ dailyViewData, tomorrowData, resolution, showSellPrice, onShowSellPriceChange, lineStyle = 'step' }) => {
   
   // Helper function to get currency unit from price data
   const getCurrencyUnit = () => {
@@ -519,7 +523,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
 
             {/* ENERGY SOURCES - Single series, style by isActual */}
             <Area
-              type="step"
+              type={lineStyle}
               dataKey="solar"
               stackId="sources"
               stroke={colors.solar}
@@ -531,7 +535,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
               connectNulls
             />
             <Area
-              type="step"
+              type={lineStyle}
               dataKey="batteryOut"
               stackId="sources"
               stroke={colors.battery}
@@ -543,7 +547,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
               connectNulls
             />
             <Area
-              type="step"
+              type={lineStyle}
               dataKey="gridIn"
               stackId="sources"
               stroke={colors.grid}
@@ -565,7 +569,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
                 so actual-vs-planned reads at a glance. An overlay-free
                 install is all residual, unchanged. */}
             <Area
-              type="step"
+              type={lineStyle}
               dataKey="homeResidual"
               stackId="consumption"
               stroke={colors.home}
@@ -577,7 +581,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
               connectNulls
             />
             <Area
-              type="step"
+              type={lineStyle}
               dataKey="homePlanned"
               stackId="consumption"
               stroke={colors.homePlanned}
@@ -592,7 +596,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
                 ForecastOutline (a Customized layer) draws the actual visual
                 mark, but isn't a data series recharts' Tooltip knows about. */}
             <Line
-              type="step"
+              type={lineStyle}
               dataKey="forecastTotal"
               stroke={colors.homePlanned}
               strokeWidth={0}
@@ -605,7 +609,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
             />
             <Customized component={ForecastOutline} />
             <Area
-              type="step"
+              type={lineStyle}
               dataKey="batteryIn"
               stackId="consumption"
               stroke={colors.battery}
@@ -617,7 +621,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
               connectNulls
             />
             <Area
-              type="step"
+              type={lineStyle}
               dataKey="gridOut"
               stackId="consumption"
               stroke={colors.gridExport}
@@ -660,7 +664,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
 
             {/* Price line on secondary Y-axis */}
             <Line
-              type="step"
+              type={lineStyle}
               dataKey="price"
               yAxisId="price"
               stroke="#9CA3AF"
@@ -671,7 +675,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
             />
             {showSellPrice && (
               <Line
-                type="step"
+                type={lineStyle}
                 dataKey="sell"
                 yAxisId="price"
                 stroke="#f59e0b"

@@ -4,7 +4,9 @@ import { Activity, Battery, Download, Home, Settings, Sun, Zap } from 'lucide-re
 import api from '../lib/api';
 import { downloadDebugBundle } from '../lib/reportProblem';
 import SystemHealthComponent from '../components/SystemHealth';
-import type { HealthStatus } from '../types';
+import type { HealthStatus, EnergyFlowLineStyle } from '../types';
+import { radioGroup } from '../components/settings/FormHelpers';
+import { normalizeEnergyFlowLineStyle } from '../utils/chartUtils';
 import { HomeFormSection } from '../components/settings/HomeFormSection';
 import type { HomeForm } from '../components/settings/HomeFormSection';
 import { PricingFormSection } from '../components/settings/PricingFormSection';
@@ -89,6 +91,8 @@ const SettingsPage: React.FC = () => {
   const [aiForm, setAiForm] = useState<AIAnalystForm>({ apiKey: '', model: 'claude-sonnet-4-6', enabled: true });
   const [demoEnabled, setDemoEnabled] = useState(false);
   const [savedDemoEnabled, setSavedDemoEnabled] = useState(false);
+  const [lineStyle, setLineStyle] = useState<EnergyFlowLineStyle>('step');
+  const [savedLineStyle, setSavedLineStyle] = useState<EnergyFlowLineStyle>('step');
   const [showEnableDemoConfirm, setShowEnableDemoConfirm] = useState(false);
 
   // ── saved snapshots (for dirty detection) ──────────────────────────────
@@ -122,7 +126,8 @@ const SettingsPage: React.FC = () => {
       JSON.stringify(batteryForm) !== savedBattery.current ||
       JSON.stringify(inverterForm) !== savedInverter.current,
     sensors: stableStringify(sensors) !== savedSensors.current,
-    system: demoEnabled !== savedDemoEnabled || JSON.stringify(aiForm) !== savedAi.current,
+    system: demoEnabled !== savedDemoEnabled || JSON.stringify(aiForm) !== savedAi.current
+      || lineStyle !== savedLineStyle,
   };
 
   // ── loading / saving / error state ────────────────────────────────────
@@ -269,6 +274,11 @@ const SettingsPage: React.FC = () => {
       const dm = s.demoMode || s.demo_mode || {};
       setDemoEnabled(dm.enabled ?? false);
       setSavedDemoEnabled(dm.enabled ?? false);
+
+      const dash = s.dashboard || {};
+      const style = normalizeEnergyFlowLineStyle(dash.energyFlowLineStyle);
+      setLineStyle(style);
+      setSavedLineStyle(style);
 
       if (healthRes.data?.checks) {
         const map: Record<string, HealthStatus> = {};
@@ -581,9 +591,11 @@ const SettingsPage: React.FC = () => {
       await api.patch('/api/settings', {
         demoMode: { enabled: demoEnabled },
         aiAnalyst: aiForm,
+        dashboard: { energyFlowLineStyle: lineStyle },
       });
       setSavedDemoEnabled(demoEnabled);
       savedAi.current = JSON.stringify(aiForm);
+      setSavedLineStyle(lineStyle);
       window.dispatchEvent(new Event('bess:demo-mode-changed'));
       setToast({ type: 'success', message: 'System settings saved.' });
     } catch (err) {
@@ -803,6 +815,25 @@ const SettingsPage: React.FC = () => {
                     </div>
                   </div>
                 )}
+              </div>
+
+              {/* Dashboard appearance */}
+              <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 space-y-3">
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Dashboard</h3>
+                {radioGroup<EnergyFlowLineStyle>(
+                  'Energy Flow line style',
+                  [
+                    { value: 'step', label: 'Steps' },
+                    { value: 'monotone', label: 'Smooth curves' },
+                  ],
+                  lineStyle,
+                  setLineStyle,
+                )}
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  {lineStyle === 'step'
+                    ? 'Each period is drawn as a flat plateau spanning its own width — what the data actually says, since every value is a per-period total rather than a reading taken at an instant.'
+                    : 'Series are smoothed between periods. Easier to read at a glance, but it implies a gradual change that did not happen and can bow through values no period actually had.'}
+                </p>
               </div>
 
               {/* AI Analyst */}

@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Changed
 
-- **The Dashboard's Energy Flow chart now draws steps instead of smooth curves** — every series is a per-period bucket total, not a sample of a continuous signal, so the old spline implied a gradual change between periods that never happened and could bow through values no period actually had. Each period now reads as a flat plateau spanning exactly its own width, and the price lines finally look like the step functions they are. Presentation only — no value, calculation or schedule changes.
+- **The Dashboard's Energy Flow chart now draws steps instead of smooth curves** — every series is a per-period bucket total, not a sample of a continuous signal, so the old spline implied a gradual change between periods that never happened and could bow through values no period actually had. Each period now reads as a flat plateau spanning exactly its own width, and the price lines finally look like the step functions they are. Prefer the old look? **Settings → System → Dashboard** switches back to smooth curves. Presentation only — no value, calculation or schedule changes.
 
 ## [11.4.0-ls] - 2026-09-21
 

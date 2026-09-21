@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { BatteryLevelChart } from '../components/BatteryLevelChart';
 import { EnergyFlowChart } from '../components/EnergyFlowChart';
 import { BatteryModeTimeline } from '../components/BatteryModeTimeline';
-import { BatterySettings, ElectricitySettings } from '../types';
+import { BatterySettings, ElectricitySettings, EnergyFlowLineStyle } from '../types';
+import { normalizeEnergyFlowLineStyle } from '../utils/chartUtils';
 import { Clock, AlertCircle, RefreshCw } from 'lucide-react';
 import EnergyFlowCards from '../components/EnergyFlowCards';
 import SystemStatusCard from '../components/SystemStatusCard';
@@ -116,6 +117,7 @@ export default function DashboardPage({
   const [reoptimizedAt, setReoptimizedAt] = useState<Date | null>(null);
   const [demoMode, setDemoMode] = useState(false);
   const [influxdbConfigPresent, setInfluxdbConfigPresent] = useState(false);
+  const [lineStyle, setLineStyle] = useState<EnergyFlowLineStyle>('step');
 
   // Runtime failures state
   const { failures, dismissFailure, dismissAllFailures } = useRuntimeFailures();
@@ -207,6 +209,8 @@ export default function DashboardPage({
         const dm = settingsResponse.data.demoMode || settingsResponse.data.demo_mode || {};
         setDemoMode(dm.enabled === true);
         setInfluxdbConfigPresent(settingsResponse.data.influxdbConfigPresent === true);
+        const dash = settingsResponse.data.dashboard || {};
+        setLineStyle(normalizeEnergyFlowLineStyle(dash.energyFlowLineStyle));
       }
 
       setLastUpdate(new Date());
@@ -489,6 +493,7 @@ export default function DashboardPage({
                 resolution={dataResolution}
                 showSellPrice={showSellPrice}
                 onShowSellPriceChange={setShowSellPrice}
+                lineStyle={lineStyle}
               />
             </div>
 

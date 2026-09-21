@@ -319,3 +319,11 @@ export type ControlModel = 'tou_register' | 'vpp_power' | 'period_list';
 
 
 
+
+/** Curve type the Energy Flow chart draws its series with.
+ *
+ * Mirrors ENERGY_FLOW_LINE_STYLES in core/bess/settings_store.py, and the
+ * values are passed straight to recharts' `type` prop. 'step' is the default:
+ * the series are per-period bucket totals, so a plateau per period is what the
+ * data actually says. 'monotone' is the previous smoothed rendering. */
+export type EnergyFlowLineStyle = 'step' | 'monotone';

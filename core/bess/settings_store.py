@@ -30,7 +30,13 @@ OWNED_SECTIONS = (
     "sensors",
     "ai_analyst",
     "demo_mode",
+    "dashboard",
 )
+
+# Energy Flow chart curve types the UI offers. "step" is the default because
+# the series are per-period bucket totals, not samples of a continuous signal;
+# "monotone" is kept for users who prefer the smoothed reading.
+ENERGY_FLOW_LINE_STYLES = ("step", "monotone")
 
 # All valid inverter platform IDs.
 VALID_PLATFORMS = (
@@ -591,6 +597,7 @@ class SettingsStore:
                 "shared": {},
             },
             "demo_mode": {"enabled": False},
+            "dashboard": {"energy_flow_line_style": "step"},
         }
 
     def _migrate_schema(self) -> None:
@@ -856,6 +863,19 @@ class SettingsStore:
         # --- demo_mode section (added v9.5) ---
         if "demo_mode" not in self.data:
             self.data["demo_mode"] = {"enabled": False}
+            changed = True
+
+        # --- dashboard section (added v11.5) ---
+        # Presentation-only preferences. Defaulted per key rather than only
+        # when the whole section is absent, so a store written by a build that
+        # had the section but not this key still gets a usable value.
+        dashboard = self.data.setdefault("dashboard", {})
+        if not isinstance(dashboard, dict):
+            dashboard = {}
+            self.data["dashboard"] = dashboard
+            changed = True
+        if dashboard.get("energy_flow_line_style") not in ENERGY_FLOW_LINE_STYLES:
+            dashboard["energy_flow_line_style"] = "step"
             changed = True
 
         # --- ai_analyst: rewrite deprecated Claude 4.0 launch model IDs ---
