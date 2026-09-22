@@ -385,7 +385,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
                 height={Math.abs(yTotal - zeroY)}
                 fill="none"
                 stroke={colors.homePlanned}
-                strokeWidth={1.5}
+                strokeWidth={1}
                 strokeDasharray="2 2.5"
               />
               <line
@@ -394,7 +394,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
                 y1={ySeam}
                 y2={ySeam}
                 stroke={colors.homePlanned}
-                strokeWidth={1.25}
+                strokeWidth={0.75}
                 strokeDasharray="2 2.5"
               />
             </g>
@@ -519,7 +519,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
             <Tooltip content={<CustomTooltip resolution={resolution} />} />
             
             {/* Reference line at zero to separate sources from consumption */}
-            <ReferenceLine y={0} stroke={colors.text} strokeWidth={2} />
+            <ReferenceLine y={0} stroke={colors.text} strokeWidth={1} />
 
             {/* ENERGY SOURCES - Single series, style by isActual */}
             <Area
@@ -528,7 +528,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
               stackId="sources"
               stroke={colors.solar}
               fill="url(#solarActualGradient)"
-              strokeWidth={2}
+              strokeWidth={1}
               name="Solar Production"
               isAnimationActive={false}
               dot={false}
@@ -540,7 +540,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
               stackId="sources"
               stroke={colors.battery}
               fill="url(#batteryActualGradient)"
-              strokeWidth={2}
+              strokeWidth={1}
               name="Battery Discharge"
               isAnimationActive={false}
               dot={false}
@@ -552,7 +552,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
               stackId="sources"
               stroke={colors.grid}
               fill="url(#gridActualGradient)"
-              strokeWidth={2}
+              strokeWidth={1}
               name="Grid Import"
               isAnimationActive={false}
               dot={false}
@@ -574,7 +574,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
               stackId="consumption"
               stroke={colors.home}
               fill="url(#homeActualGradient)"
-              strokeWidth={2}
+              strokeWidth={1}
               name="Home Load"
               isAnimationActive={false}
               dot={false}
@@ -586,7 +586,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
               stackId="consumption"
               stroke={colors.homePlanned}
               fill="url(#homePlannedActualGradient)"
-              strokeWidth={2}
+              strokeWidth={1}
               name="Planned Load"
               isAnimationActive={false}
               dot={false}
@@ -614,7 +614,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
               stackId="consumption"
               stroke={colors.battery}
               fill="url(#batteryChargeActualGradient)"
-              strokeWidth={2}
+              strokeWidth={1}
               name="Battery Charge"
               isAnimationActive={false}
               dot={false}
@@ -626,7 +626,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
               stackId="consumption"
               stroke={colors.gridExport}
               fill="url(#gridExportActualGradient)"
-              strokeWidth={2}
+              strokeWidth={1}
               name="Grid Export"
               isAnimationActive={false}
               dot={false}
@@ -668,7 +668,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
               dataKey="price"
               yAxisId="price"
               stroke="#9CA3AF"
-              strokeWidth={1.5}
+              strokeWidth={1}
               dot={false}
               name="Buy Price"
               connectNulls={false}
@@ -679,7 +679,7 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
                 dataKey="sell"
                 yAxisId="price"
                 stroke="#f59e0b"
-                strokeWidth={1.5}
+                strokeWidth={1}
                 strokeDasharray="4 3"
                 dot={false}
                 name="Sell Price"
