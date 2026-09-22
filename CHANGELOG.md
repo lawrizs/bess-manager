@@ -4,6 +4,16 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **The Energy Flow chart's legend now shows and hides series** — click any entry to drop that flow from the chart and click again to bring it back, so a busy chart can be narrowed to what you want to compare. Battery and Grid each cover both directions, as the legend already read them. ([#20](https://github.com/lawrizs/bess-manager/pull/20))
+
+### Changed
+
+- **The Energy Flow chart's lines are thinner** — every series, the price lines and the zero axis drop a step in weight, so the stacked areas read more clearly. Presentation only. ([#20](https://github.com/lawrizs/bess-manager/pull/20))
+
 ## [11.6.0-ls] - 2026-09-21
 
 ### Added
