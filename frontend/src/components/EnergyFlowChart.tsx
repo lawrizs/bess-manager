@@ -158,7 +158,14 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
     );
   }
   return null;
-};export const EnergyFlowChart: React.FC<{
+};
+
+/** Legend-level grouping of the chart's series. Battery and Grid each cover
+ * both directions, because that is how the legend has always named them --
+ * one entry, one colour, both flows. */
+type SeriesKey = 'solar' | 'battery' | 'grid' | 'home' | 'planned' | 'buyPrice' | 'sellPrice';
+
+export const EnergyFlowChart: React.FC<{
   dailyViewData: HourlyData[];
   tomorrowData?: HourlyData[] | null;
   currentHour: number;
@@ -192,6 +199,18 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
     return () => observer.disconnect();
   }, []);
+
+  const [hiddenSeries, setHiddenSeries] = useState<Set<SeriesKey>>(new Set());
+  const isVisible = (key: SeriesKey) => !hiddenSeries.has(key);
+  const toggleSeries = (key: SeriesKey) => {
+    setHiddenSeries(prev => {
+      const next = new Set(prev);
+      if (!next.delete(key)) {
+        next.add(key);
+      }
+      return next;
+    });
+  };
   
   const colors = {
     solar: '#fbbf24',        // Yellow
@@ -354,6 +373,12 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
   // already obvious from where it falls relative to "now".
   const hasPlannedLoad = chartData.some(d => d.homePlanned !== 0 || d.forecastTotal !== null);
 
+  // The frozen-forecast outline is drawn at absolute y (zero -> total), so it
+  // does not restack when a consumption series is hidden. Held against a
+  // partial stack it would read as a mismatch that isn't there, so it draws
+  // only while both halves of that stack are showing.
+  const showForecastOutline = isVisible('home') && isVisible('planned');
+
   // A recharts <Customized> layer: for each elapsed period with a plan,
   // draws the frozen forecast shape -- the same residual+planned stack a
   // future period renders solid and filled, just as a dotted, unfilled
@@ -403,6 +428,35 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
       </g>
     );
   };
+
+  const areaSwatch = (color: string) => (
+    <div className="w-4 h-3 rounded mr-2 shrink-0" style={{ backgroundColor: color }} />
+  );
+
+  const lineSwatch = (color: string) => (
+    <div
+      className="w-4 h-1 mr-2 shrink-0"
+      style={{ backgroundColor: color, borderStyle: 'dashed', borderWidth: '1px 0' }}
+    />
+  );
+
+  const legendItem = (key: SeriesKey, label: string, swatch: React.ReactNode) => (
+    <button
+      key={key}
+      type="button"
+      onClick={() => toggleSeries(key)}
+      aria-pressed={isVisible(key)}
+      title={isVisible(key) ? `Hide ${label}` : `Show ${label}`}
+      className={`flex items-center rounded px-1 py-0.5 hover:bg-gray-100 dark:hover:bg-gray-700 ${
+        isVisible(key) ? '' : 'opacity-40'
+      }`}
+    >
+      {swatch}
+      <span className={`text-gray-700 dark:text-gray-300 ${isVisible(key) ? '' : 'line-through'}`}>
+        {label}
+      </span>
+    </button>
+  );
 
   return (
     <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
@@ -522,42 +576,48 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
             <ReferenceLine y={0} stroke={colors.text} strokeWidth={1} />
 
             {/* ENERGY SOURCES - Single series, style by isActual */}
-            <Area
-              type={lineStyle}
-              dataKey="solar"
-              stackId="sources"
-              stroke={colors.solar}
-              fill="url(#solarActualGradient)"
-              strokeWidth={1}
-              name="Solar Production"
-              isAnimationActive={false}
-              dot={false}
-              connectNulls
-            />
-            <Area
-              type={lineStyle}
-              dataKey="batteryOut"
-              stackId="sources"
-              stroke={colors.battery}
-              fill="url(#batteryActualGradient)"
-              strokeWidth={1}
-              name="Battery Discharge"
-              isAnimationActive={false}
-              dot={false}
-              connectNulls
-            />
-            <Area
-              type={lineStyle}
-              dataKey="gridIn"
-              stackId="sources"
-              stroke={colors.grid}
-              fill="url(#gridActualGradient)"
-              strokeWidth={1}
-              name="Grid Import"
-              isAnimationActive={false}
-              dot={false}
-              connectNulls
-            />
+            {isVisible('solar') && (
+              <Area
+                type={lineStyle}
+                dataKey="solar"
+                stackId="sources"
+                stroke={colors.solar}
+                fill="url(#solarActualGradient)"
+                strokeWidth={1}
+                name="Solar Production"
+                isAnimationActive={false}
+                dot={false}
+                connectNulls
+              />
+            )}
+            {isVisible('battery') && (
+              <Area
+                type={lineStyle}
+                dataKey="batteryOut"
+                stackId="sources"
+                stroke={colors.battery}
+                fill="url(#batteryActualGradient)"
+                strokeWidth={1}
+                name="Battery Discharge"
+                isAnimationActive={false}
+                dot={false}
+                connectNulls
+              />
+            )}
+            {isVisible('grid') && (
+              <Area
+                type={lineStyle}
+                dataKey="gridIn"
+                stackId="sources"
+                stroke={colors.grid}
+                fill="url(#gridActualGradient)"
+                strokeWidth={1}
+                name="Grid Import"
+                isAnimationActive={false}
+                dot={false}
+                connectNulls
+              />
+            )}
             {/* ENERGY CONSUMPTION - Home Load (#749). Future periods stack
                 residual + planned (Planned Consumption Changes, e.g. EV
                 charging), solid and filled. An elapsed period with a plan
@@ -568,70 +628,80 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
                 future period would) as a dotted, unfilled outline over it,
                 so actual-vs-planned reads at a glance. An overlay-free
                 install is all residual, unchanged. */}
-            <Area
-              type={lineStyle}
-              dataKey="homeResidual"
-              stackId="consumption"
-              stroke={colors.home}
-              fill="url(#homeActualGradient)"
-              strokeWidth={1}
-              name="Home Load"
-              isAnimationActive={false}
-              dot={false}
-              connectNulls
-            />
-            <Area
-              type={lineStyle}
-              dataKey="homePlanned"
-              stackId="consumption"
-              stroke={colors.homePlanned}
-              fill="url(#homePlannedActualGradient)"
-              strokeWidth={1}
-              name="Planned Load"
-              isAnimationActive={false}
-              dot={false}
-              connectNulls
-            />
+            {isVisible('home') && (
+              <Area
+                type={lineStyle}
+                dataKey="homeResidual"
+                stackId="consumption"
+                stroke={colors.home}
+                fill="url(#homeActualGradient)"
+                strokeWidth={1}
+                name="Home Load"
+                isAnimationActive={false}
+                dot={false}
+                connectNulls
+              />
+            )}
+            {isVisible('planned') && (
+              <Area
+                type={lineStyle}
+                dataKey="homePlanned"
+                stackId="consumption"
+                stroke={colors.homePlanned}
+                fill="url(#homePlannedActualGradient)"
+                strokeWidth={1}
+                name="Planned Load"
+                isAnimationActive={false}
+                dot={false}
+                connectNulls
+              />
+            )}
             {/* Invisible line purely to feed the shared Tooltip's payload --
                 ForecastOutline (a Customized layer) draws the actual visual
                 mark, but isn't a data series recharts' Tooltip knows about. */}
-            <Line
-              type={lineStyle}
-              dataKey="forecastTotal"
-              stroke={colors.homePlanned}
-              strokeWidth={0}
-              name="Forecast Total"
-              isAnimationActive={false}
-              dot={false}
-              activeDot={false}
-              legendType="none"
-              connectNulls={false}
-            />
-            <Customized component={ForecastOutline} />
-            <Area
-              type={lineStyle}
-              dataKey="batteryIn"
-              stackId="consumption"
-              stroke={colors.battery}
-              fill="url(#batteryChargeActualGradient)"
-              strokeWidth={1}
-              name="Battery Charge"
-              isAnimationActive={false}
-              dot={false}
-              connectNulls
-            />
-            <Area
-              type={lineStyle}
-              dataKey="gridOut"
-              stackId="consumption"
-              stroke={colors.gridExport}
-              fill="url(#gridExportActualGradient)"
-              strokeWidth={1}
-              name="Grid Export"
-              isAnimationActive={false}
-              dot={false}
-              connectNulls
-            />
+            {showForecastOutline && (
+              <Line
+                type={lineStyle}
+                dataKey="forecastTotal"
+                stroke={colors.homePlanned}
+                strokeWidth={0}
+                name="Forecast Total"
+                isAnimationActive={false}
+                dot={false}
+                activeDot={false}
+                legendType="none"
+                connectNulls={false}
+              />
+            )}
+            {showForecastOutline && <Customized component={ForecastOutline} />}
+            {isVisible('battery') && (
+              <Area
+                type={lineStyle}
+                dataKey="batteryIn"
+                stackId="consumption"
+                stroke={colors.battery}
+                fill="url(#batteryChargeActualGradient)"
+                strokeWidth={1}
+                name="Battery Charge"
+                isAnimationActive={false}
+                dot={false}
+                connectNulls
+              />
+            )}
+            {isVisible('grid') && (
+              <Area
+                type={lineStyle}
+                dataKey="gridOut"
+                stackId="consumption"
+                stroke={colors.gridExport}
+                fill="url(#gridExportActualGradient)"
+                strokeWidth={1}
+                name="Grid Export"
+                isAnimationActive={false}
+                dot={false}
+                connectNulls
+              />
+            )}
             {/* Overlay for predicted hours (today only) */}
             {firstPredictedHour !== null && (
               <ReferenceArea
@@ -663,17 +733,19 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
             )}
 
             {/* Price line on secondary Y-axis */}
-            <Line
-              type={lineStyle}
-              dataKey="price"
-              yAxisId="price"
-              stroke="#9CA3AF"
-              strokeWidth={1}
-              dot={false}
-              name="Buy Price"
-              connectNulls={false}
-            />
-            {showSellPrice && (
+            {isVisible('buyPrice') && (
+              <Line
+                type={lineStyle}
+                dataKey="price"
+                yAxisId="price"
+                stroke="#9CA3AF"
+                strokeWidth={1}
+                dot={false}
+                name="Buy Price"
+                connectNulls={false}
+              />
+            )}
+            {showSellPrice && isVisible('sellPrice') && (
               <Line
                 type={lineStyle}
                 dataKey="sell"
@@ -690,40 +762,15 @@ const CustomTooltip = ({ active, payload, label, resolution }: any) => {
         </ResponsiveContainer>
       </div>
 
-      {/* Custom Legend - showing main categories and actual/predicted distinction */}
-      <div className="flex flex-wrap justify-center gap-6 mt-1 text-sm">
-        <div className="flex items-center">
-          <div className="w-4 h-3 rounded mr-2" style={{ backgroundColor: colors.solar }}></div>
-          <span className="text-gray-700 dark:text-gray-300">Solar Production</span>
-        </div>
-        <div className="flex items-center">
-          <div className="w-4 h-3 rounded mr-2" style={{ backgroundColor: colors.battery }}></div>
-          <span className="text-gray-700 dark:text-gray-300">Battery Charge / Discharge</span>
-        </div>
-        <div className="flex items-center">
-          <div className="w-4 h-3 rounded mr-2" style={{ backgroundColor: colors.grid }}></div>
-          <span className="text-gray-700 dark:text-gray-300">Grid Import / Export</span>
-        </div>
-        <div className="flex items-center">
-          <div className="w-4 h-3 rounded mr-2" style={{ backgroundColor: colors.home }}></div>
-          <span className="text-gray-700 dark:text-gray-300">Home Load</span>
-        </div>
-        {hasPlannedLoad && (
-          <div className="flex items-center">
-            <div className="w-4 h-3 rounded mr-2" style={{ backgroundColor: colors.homePlanned }}></div>
-            <span className="text-gray-700 dark:text-gray-300">Planned Load</span>
-          </div>
-        )}
-        <div className="flex items-center">
-          <div className="w-4 h-1" style={{ backgroundColor: '#9CA3AF', borderStyle: 'dashed', borderWidth: '1px 0' }}></div>
-          <span className="text-gray-700 dark:text-gray-300 ml-2">Buy Price</span>
-        </div>
-        {showSellPrice && (
-          <div className="flex items-center">
-            <div className="w-4 h-1" style={{ backgroundColor: '#f59e0b', borderStyle: 'dashed', borderWidth: '1px 0' }}></div>
-            <span className="text-gray-700 dark:text-gray-300 ml-2">Sell Price</span>
-          </div>
-        )}
+      {/* Custom Legend -- each entry toggles its series for this session */}
+      <div className="flex flex-wrap justify-center gap-4 mt-1 text-sm">
+        {legendItem('solar', 'Solar Production', areaSwatch(colors.solar))}
+        {legendItem('battery', 'Battery Charge / Discharge', areaSwatch(colors.battery))}
+        {legendItem('grid', 'Grid Import / Export', areaSwatch(colors.grid))}
+        {legendItem('home', 'Home Load', areaSwatch(colors.home))}
+        {hasPlannedLoad && legendItem('planned', 'Planned Load', areaSwatch(colors.homePlanned))}
+        {legendItem('buyPrice', 'Buy Price', lineSwatch('#9CA3AF'))}
+        {showSellPrice && legendItem('sellPrice', 'Sell Price', lineSwatch('#f59e0b'))}
       </div>
     </div>
   );
