@@ -156,7 +156,10 @@ class TestCrossPlatformHardwareWrites:
             assert mock_controller.calls["grid_charge"] == []
             assert mock_controller.calls["discharge_rate"] == []
         elif _is_solax(platform_system):
-            assert len(mock_controller.calls["vpp_disabled"]) == 1
+            # Native SolaX holds the battery for IDLE rather than releasing to
+            # self-use, but the hold carries no power target of its own -- the
+            # invariant this test is named for still holds.
+            assert len(mock_controller.calls["vpp_no_discharge_holds"]) == 1
             assert len(mock_controller.calls["vpp_calls"]) == 0
         elif _is_solax_modbus(platform_system):
             # IDLE → load_first; EMS registers now written unconditionally

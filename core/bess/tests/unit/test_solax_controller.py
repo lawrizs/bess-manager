@@ -114,24 +114,101 @@ class TestWriteScheduleToHardware:
 # ── _write_period_to_hardware: IDLE / SOLAR_STORAGE ──────────────────────────
 
 
-class TestWritePeriodToHardwareDisablesVppForIdle:
-    def test_idle_intent_disables_vpp(self, controller: SolaxController) -> None:
+class TestWritePeriodToHardwareIdleHold:
+    """IDLE holds the battery through the vendor's "Enabled No Discharge"
+    mode; SOLAR_STORAGE still releases to self-use.
+
+    Command-level assertions: no SolaX execution model exists in this
+    codebase (`vpp_simulator` is Growatt-only), so what BESS writes is the
+    only observable. The outcome these commands stand in for is the vendor
+    mode's own documented split -- surplus PV charges the battery, a deficit
+    holds SoC and imports -- which is `_idle_battery_flows` exactly.
+    """
+
+    def test_idle_holds_the_battery_instead_of_releasing_to_self_use(
+        self, controller: SolaxController
+    ) -> None:
+        """Self-use covers house load from the battery, but IDLE's own cost
+        model never credits that discharge (`_idle_battery_flows`), so the
+        period must not be handed back to it."""
         mock_hw = MagicMock()
         controller._write_period_to_hardware(
-            mock_hw, grid_charge=False, discharge_rate=0
+            mock_hw, grid_charge=False, discharge_rate=0, strategic_intent="IDLE"
         )
 
-        mock_hw.set_solax_vpp_disabled.assert_called_once()
+        mock_hw.set_solax_no_discharge_hold.assert_called_once()
+        mock_hw.set_solax_vpp_disabled.assert_not_called()
         mock_hw.set_solax_active_power_control.assert_not_called()
 
-    def test_solar_storage_also_disables_vpp(self, controller: SolaxController) -> None:
-        # SOLAR_STORAGE maps to grid_charge=False, discharge_rate=0
+    def test_idle_at_the_reserve_floor_releases_instead_of_holding(
+        self, controller: SolaxController
+    ) -> None:
+        """The hold protects stored energy; at the floor there is none left
+        to protect, and holding would keep rearming the autorepeat window so
+        the inverter is never handed back (#592)."""
         mock_hw = MagicMock()
         controller._write_period_to_hardware(
-            mock_hw, grid_charge=False, discharge_rate=0
+            mock_hw,
+            grid_charge=False,
+            discharge_rate=0,
+            strategic_intent="IDLE",
+            at_reserve_floor=True,
         )
 
         mock_hw.set_solax_vpp_disabled.assert_called_once()
+        mock_hw.set_solax_no_discharge_hold.assert_not_called()
+
+    def test_solar_storage_still_disables_vpp(
+        self, controller: SolaxController
+    ) -> None:
+        """SOLAR_STORAGE shares IDLE's grid_charge=False/discharge_rate=0
+        control values, so only the intent separates them -- it must keep
+        releasing to self-use."""
+        mock_hw = MagicMock()
+        controller._write_period_to_hardware(
+            mock_hw,
+            grid_charge=False,
+            discharge_rate=0,
+            strategic_intent="SOLAR_STORAGE",
+        )
+
+        mock_hw.set_solax_vpp_disabled.assert_called_once()
+        mock_hw.set_solax_no_discharge_hold.assert_not_called()
+
+    def test_native_load_support_still_disables_vpp(
+        self, battery_settings: BatterySettings
+    ) -> None:
+        """#413's release must not be captured by the IDLE branch."""
+        battery_settings.solax_native_load_support_enabled = True
+        controller = SolaxController(battery_settings=battery_settings)
+        mock_hw = MagicMock()
+        controller._write_period_to_hardware(
+            mock_hw,
+            grid_charge=False,
+            discharge_rate=40,
+            strategic_intent="LOAD_SUPPORT",
+        )
+
+        mock_hw.set_solax_vpp_disabled.assert_called_once()
+        mock_hw.set_solax_no_discharge_hold.assert_not_called()
+
+    def test_apply_period_threads_the_reserve_floor_through(
+        self, controller: SolaxController
+    ) -> None:
+        """BSM derives at_reserve_floor from a live SoC read and passes it to
+        apply_period; dropping it there would leave the release unreachable
+        in production while the unit tests above still passed."""
+        mock_hw = MagicMock()
+        controller.apply_period(
+            mock_hw,
+            grid_charge=False,
+            discharge_rate=0,
+            strategic_intent="IDLE",
+            at_reserve_floor=True,
+        )
+
+        mock_hw.set_solax_vpp_disabled.assert_called_once()
+        mock_hw.set_solax_no_discharge_hold.assert_not_called()
 
 
 # ── _write_period_to_hardware: GRID_CHARGING ─────────────────────────────────
@@ -513,12 +590,39 @@ class TestVppDisplayState:
         )
         assert (power_pct, remote_control) == (-60, True)
 
-    def test_idle_shows_zero_power_remote_disabled(self, solax_controller):
+    def test_solar_storage_shows_zero_power_remote_disabled(
+        self, solax_controller: SolaxController
+    ) -> None:
         """Matches _write_period_to_hardware's `set_solax_vpp_disabled()`
         branch (grid_charge=False, discharge_rate=0) -- self-use passthrough,
         NOT a grid-first hold. SolaX has no block_passive_charging
         equivalent (see TODO.md gap note)."""
         power_pct, remote_control = solax_controller._vpp_display_state(
-            grid_charge=False, discharge_rate=0
+            grid_charge=False, discharge_rate=0, strategic_intent="SOLAR_STORAGE"
+        )
+        assert (power_pct, remote_control) == (0, False)
+
+    def test_idle_shows_remote_enabled_with_no_power_of_its_own(
+        self, solax_controller: SolaxController
+    ) -> None:
+        """The hold is armed (remote control on), but BESS writes no push
+        power for it -- the vendor mode computes its own. Reporting a power
+        here would fabricate a command `_write_period_to_hardware` never
+        sends."""
+        power_pct, remote_control = solax_controller._vpp_display_state(
+            grid_charge=False, discharge_rate=0, strategic_intent="IDLE"
+        )
+        assert (power_pct, remote_control) == (0, True)
+
+    def test_idle_at_the_reserve_floor_shows_remote_disabled(
+        self, solax_controller: SolaxController
+    ) -> None:
+        """Mirrors the #592 release: a displayed hold for a period production
+        releases is exactly the fabrication _mode_display_fields forbids."""
+        power_pct, remote_control = solax_controller._vpp_display_state(
+            grid_charge=False,
+            discharge_rate=0,
+            strategic_intent="IDLE",
+            at_reserve_floor=True,
         )
         assert (power_pct, remote_control) == (0, False)

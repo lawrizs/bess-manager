@@ -18,6 +18,7 @@ class SolaxMockController(MockHomeAssistantController):
         super().__init__()
         self.vpp_calls: list[int] = []  # watts sent to active_power_control
         self.vpp_disabled_count: int = 0
+        self.no_discharge_hold_count: int = 0
         self.min_soc_set: list[int] = []
         self.power_control_mode: str | None = "Self Use Mode"
         # Already seeded by MockHomeAssistantController.__init__, but restated
@@ -36,6 +37,9 @@ class SolaxMockController(MockHomeAssistantController):
 
     def set_solax_vpp_disabled(self) -> None:
         self.vpp_disabled_count += 1
+
+    def set_solax_no_discharge_hold(self) -> None:
+        self.no_discharge_hold_count += 1
 
     def set_solax_min_soc(self, soc: int) -> None:
         self.min_soc_set.append(soc)
@@ -111,13 +115,31 @@ class TestSolaxVppCommandsPerIntent:
         assert len(hw.vpp_calls) == 1
         assert hw.vpp_calls[0] < 0
 
-    def test_idle_period_disables_vpp(self) -> None:
+    def test_idle_period_holds_the_battery(self) -> None:
+        """With energy above the reserve, IDLE holds rather than releasing:
+        self-use would cover the house from a battery the plan never budgeted
+        to spend (`_idle_battery_flows` credits no IDLE discharge)."""
         bsm, hw = _make_bsm_solax()
         _set_intent(bsm, PERIOD, "IDLE")
 
         bsm._apply_period_schedule(PERIOD)
 
+        assert hw.no_discharge_hold_count == 1
+        assert hw.vpp_disabled_count == 0
+        assert len(hw.vpp_calls) == 0
+
+    def test_idle_period_at_the_reserve_floor_releases_instead(self) -> None:
+        """At the floor the hold protects nothing, and re-arming it every
+        period would stop the inverter ever idling down (#592). The floor is
+        read live off the SoC sensor, which is why this goes through BSM."""
+        bsm, hw = _make_bsm_solax()
+        hw.settings["battery_soc"] = bsm.battery_settings.min_soc
+        _set_intent(bsm, PERIOD, "IDLE")
+
+        bsm._apply_period_schedule(PERIOD)
+
         assert hw.vpp_disabled_count == 1
+        assert hw.no_discharge_hold_count == 0
         assert len(hw.vpp_calls) == 0
 
     def test_solar_storage_period_disables_vpp(self) -> None:
