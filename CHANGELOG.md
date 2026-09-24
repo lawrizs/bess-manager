@@ -4,11 +4,11 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [11.8.0-ls] - 2026-09-24
 
 ### Changed
 
-- **SolaX: idle periods now hold the battery instead of quietly spending it** — when the schedule plans to do nothing with the battery, BESS used to hand the period back to the inverter's own self-use logic, which covers the house from the battery even though the plan never counted on that energy being spent. Those periods now use the inverter's "no discharge" mode: the house is covered from solar and grid, while surplus solar still charges the battery exactly as before. Once the battery reaches your configured minimum, BESS hands control back as it always did — there is nothing left to protect, and letting go lets the inverter settle. Requires a recent `solax_modbus`; older versions don't offer the mode and the write will be logged as a failure. Native SolaX inverters only — Growatt is unaffected.
+- **SolaX: idle periods now hold the battery instead of quietly spending it** — when the schedule plans to do nothing with the battery, BESS used to hand the period back to the inverter's own self-use logic, which covers the house from the battery even though the plan never counted on that energy being spent. Those periods now use the inverter's "no discharge" mode: the house is covered from solar and grid, while surplus solar still charges the battery exactly as before. Once the battery reaches your configured minimum, BESS hands control back as it always did — there is nothing left to protect, and letting go lets the inverter settle. Requires a recent `solax_modbus`; older versions don't offer the mode and the write will be logged as a failure. Native SolaX inverters only — Growatt is unaffected. ([#22](https://github.com/lawrizs/bess-manager/pull/22))
 
 ## [11.7.0-ls] - 2026-09-22
 
