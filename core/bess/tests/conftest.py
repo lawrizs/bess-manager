@@ -122,6 +122,7 @@ class MockHomeAssistantController(HomeAssistantAPIController):
             # SolaX
             "vpp_calls": [],
             "vpp_disabled": [],
+            "vpp_no_discharge_holds": [],
             "min_soc": [],
             # Growatt VPP (solax_modbus GEN3|GEN4)
             "growatt_vpp_status": [],
@@ -346,6 +347,10 @@ class MockHomeAssistantController(HomeAssistantAPIController):
     def set_solax_vpp_disabled(self) -> None:
         """Record VPP disable command."""
         self.calls["vpp_disabled"].append(True)
+
+    def set_solax_no_discharge_hold(self) -> None:
+        """Record the IDLE no-discharge hold command."""
+        self.calls["vpp_no_discharge_holds"].append(True)
 
     def set_solax_min_soc(self, min_soc: int) -> None:
         """Record SolaX min SOC write."""

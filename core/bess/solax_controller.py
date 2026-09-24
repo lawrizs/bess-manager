@@ -12,9 +12,12 @@ Control model:
   2. Set active power target (positive = charge, negative = discharge).
   3. Set autorepeat duration to 1 200 s (covers 15-min period plus margin).
   4. Press trigger.
-- For IDLE / SOLAR_STORAGE the inverter is placed back into self-use mode via
+- For SOLAR_STORAGE the inverter is placed back into self-use mode via
   ``set_solax_vpp_disabled()``; autorepeat on the previous command expires
   naturally, providing a safe fallback.
+- For IDLE the battery is held instead, via ``set_solax_no_discharge_hold()``
+  — the same trigger and autorepeat window, selecting the vendor's "Enabled
+  No Discharge" mode rather than a power target.
 
 Intent-to-power mapping:
 - GRID_CHARGING    → +(rate% x max_charge_W)  (charge at the plan's rate, #754)
@@ -24,7 +27,16 @@ Intent-to-power mapping:
   period to the inverter's own self-use load-following so it covers the actual
   deficit instead of the forecast one (the #413 trade, opt-in here)
 - BATTERY_EXPORT -> -max_discharge_W (full discharge for export)
-- IDLE             → disable VPP      (no battery action)
+- IDLE             → "Enabled No Discharge" hold: house load is covered from
+  grid/solar rather than the battery, while surplus PV still charges it.
+  Ports the Growatt VPP IDLE hold (#466) to this platform, where the vendor
+  mode gets both halves of ``_idle_battery_flows`` right instead of trading
+  one for the other. The hold itself is **confirmed on real hardware** — a
+  battery held through IDLE periods instead of being spent on house load.
+  The surplus-PV half and the reserve-floor release below are read off the
+  solax_modbus plugin source and have not been separately observed.
+- IDLE at the reserve floor → disable VPP (#592): nothing left to protect,
+  and a standing hold would keep the inverter from ever idling down.
 """
 
 import logging
@@ -156,14 +168,15 @@ class SolaxController(InverterController):
     ) -> tuple[bool, str]:
         """Write period control settings to hardware.
 
-        Overrides the base class only to thread `charge_rate` and
-        `strategic_intent` through to `_write_period_to_hardware` -- the base
-        `apply_period` passes on neither, since register-based platforms
-        realize the rate via a separate register instead and have no intent to
-        distinguish (see `apply_period`'s own docstring). The intent is needed
-        here because `grid_charge`/`discharge_rate` collapse LOAD_SUPPORT and
-        BATTERY_EXPORT to the same values, and only the former may be
-        handed over.
+        Overrides the base class only to thread `charge_rate`,
+        `strategic_intent` and `at_reserve_floor` through to
+        `_write_period_to_hardware` -- the base `apply_period` passes on none
+        of them, since register-based platforms realize the rate via a
+        separate register instead and have no intent to distinguish (see
+        `apply_period`'s own docstring). The intent is needed here because
+        `grid_charge`/`discharge_rate` collapse LOAD_SUPPORT, BATTERY_EXPORT
+        and IDLE onto shared values, and each is handled differently; the
+        floor flag is what releases IDLE's hold (#592).
         """
         return self._write_period_to_hardware(
             controller,
@@ -172,6 +185,7 @@ class SolaxController(InverterController):
             block_passive_charging,
             charge_rate,
             strategic_intent,
+            at_reserve_floor,
         )
 
     def _write_period_to_hardware(
@@ -182,6 +196,7 @@ class SolaxController(InverterController):
         block_passive_charging: bool = False,
         charge_rate: int = 100,
         strategic_intent: str = "",
+        at_reserve_floor: bool = False,
     ) -> tuple[bool, str]:
         """Issue a SolaX VPP command for the current period.
 
@@ -190,7 +205,24 @@ class SolaxController(InverterController):
 
         - ``grid_charge=True``  → charge at `charge_rate` (#754), the plan's
           action-derived rate.
-        - ``grid_charge=False, discharge_rate=0`` → disable VPP (IDLE / SOLAR_STORAGE).
+        - ``grid_charge=False, intent=IDLE`` → the vendor's "Enabled No
+          Discharge" hold. Self-use would cover house load from the battery,
+          but IDLE's own cost model never credits that discharge
+          (`_idle_battery_flows`), so self-consumption must come from grid
+          and solar. The mode still lets surplus PV charge the battery, which
+          that same model *does* credit -- see
+          `HomeAssistantAPIController.set_solax_no_discharge_hold`.
+        - ``grid_charge=False, intent=IDLE, at_reserve_floor=True`` → disable
+          VPP instead (#592). The hold protects stored energy; at the floor
+          there is none left to protect, and holding would keep rearming the
+          autorepeat window every period, so the inverter is never handed
+          back and its BMS never idles down. Safer here than on Growatt VPP,
+          which skips `sync_soc_limits` entirely: `initialize_hardware` does
+          write the inverter's own min SOC, so released self-use cannot
+          discharge below the configured floor.
+        - ``grid_charge=False, discharge_rate=0`` → disable VPP
+          (SOLAR_STORAGE, and SOLAR_EXPORT -- see the
+          ``block_passive_charging`` note below).
         - ``grid_charge=False, intent=LOAD_SUPPORT`` with native load support on
           → disable VPP, handing the period to the inverter's own self-use
           load-following so it covers the actual deficit rather than the
@@ -221,7 +253,12 @@ class SolaxController(InverterController):
                 grid_charge/discharge_rate collapse LOAD_SUPPORT and
                 BATTERY_EXPORT to the same values and only the former is
                 eligible for native load support -- the same reason #413
-                threaded it for Growatt VPP.
+                threaded it for Growatt VPP -- and because IDLE shares
+                SOLAR_STORAGE's values while needing the opposite command.
+            at_reserve_floor: Whether the battery is at (or below) its
+                configured minimum SoE, from a live SoC read rather than the
+                plan: the hold exists to protect stored energy, so what
+                matters is whether any is actually there now.
 
         Returns:
             Tuple of (success, error_message). error_message is empty on success.
@@ -231,11 +268,13 @@ class SolaxController(InverterController):
             and self.battery_settings.solax_native_load_support_enabled
         )
         try:
-            if not grid_charge and (discharge_rate == 0 or use_native_load_support):
-                controller.set_solax_vpp_disabled()
-            elif grid_charge:
+            if grid_charge:
                 target_watts = int(self.max_charge_power_kw * charge_rate / 100 * 1000)
                 controller.set_solax_active_power_control(target_watts)
+            elif strategic_intent == "IDLE" and not at_reserve_floor:
+                controller.set_solax_no_discharge_hold()
+            elif discharge_rate == 0 or use_native_load_support:
+                controller.set_solax_vpp_disabled()
             else:
                 target_watts = -int(
                     self.max_discharge_power_kw * discharge_rate / 100 * 1000
@@ -267,16 +306,22 @@ class SolaxController(InverterController):
         `block_passive_charging` is still ignored, because the write path
         ignores it too -- SolaX never received the #355 Growatt VPP fix, so
         its real SOLAR_EXPORT behaviour differs and there is nothing here to
-        mirror. at_reserve_floor (#592) is in that same category: native SolaX
-        never received the Growatt VPP IDLE hold (#466) that #592 releases, so
-        there is nothing here to release. Both stay in the signature only so
-        the base class's _mode_display_fields() can call _vpp_display_state()
-        uniformly across all vpp_power controllers.
+        mirror. It stays in the signature only so the base class's
+        _mode_display_fields() can call _vpp_display_state() uniformly across
+        all vpp_power controllers.
 
-        charge_rate (#754) is NOT in that category: unlike the others, it
-        does change what this reports, mirroring how _write_period_to_hardware
-        now scales its actual watts command to the plan's rate instead of
-        always writing max_charge_power_kw.
+        at_reserve_floor (#592) *is* read now that IDLE holds rather than
+        releasing: a displayed hold for a period production releases is the
+        fabrication _mode_display_fields exists to prevent.
+
+        The IDLE hold reports 0% with remote control on, which is what the
+        write path actually does -- the vendor mode computes its own battery
+        power, so BESS commands none. Reporting a figure here would invent a
+        command nothing sends.
+
+        charge_rate (#754) likewise changes what this reports, mirroring how
+        _write_period_to_hardware scales its actual watts command to the
+        plan's rate instead of always writing max_charge_power_kw.
 
         Returns:
             (power_pct, remote_control_enabled) -- power_pct expressed as a
@@ -287,10 +332,12 @@ class SolaxController(InverterController):
             strategic_intent == "LOAD_SUPPORT"
             and self.battery_settings.solax_native_load_support_enabled
         )
-        if not grid_charge and (discharge_rate == 0 or use_native_load_support):
-            return 0, False
         if grid_charge:
             return charge_rate, True
+        if strategic_intent == "IDLE" and not at_reserve_floor:
+            return 0, True
+        if discharge_rate == 0 or use_native_load_support:
+            return 0, False
         return -discharge_rate, True
 
     def sync_to_hardware(
@@ -469,7 +516,9 @@ class SolaxController(InverterController):
 
             if intent == "GRID_CHARGING":
                 action = "+charge"
-            elif intent in ("SOLAR_STORAGE", "IDLE"):
+            elif intent == "IDLE":
+                action = "hold"
+            elif intent == "SOLAR_STORAGE":
                 action = "self-use"
             else:
                 action = "-discharge"

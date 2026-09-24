@@ -2451,6 +2451,32 @@ class HomeAssistantAPIController:
 
     # ── SolaX VPP control ─────────────────────────────────────────────────────
 
+    # Covers a 15-min period with margin. Rewritten by every VPP command, so
+    # it doubles as the dead-man's-switch: stop writing and the inverter
+    # reverts to self-use once the window lapses.
+    _SOLAX_AUTOREPEAT_SECONDS: ClassVar[int] = 1200
+
+    def _arm_solax_vpp_window(self) -> None:
+        """Arm autorepeat and fire the mode 8/9 trigger.
+
+        The shared tail of every SolaX VPP command — the trigger is what
+        commits whatever the mode/power entities currently hold.
+        """
+        repeat_entity = self._get_entity_for_service("solax_autorepeat_duration")
+        trigger_entity = self._get_entity_for_service("solax_power_control_trigger")
+
+        self._set_number_like(
+            repeat_entity,
+            self._SOLAX_AUTOREPEAT_SECONDS,
+            "SolaX VPP set autorepeat duration",
+        )
+        self._service_call_with_retry(
+            "button",
+            "press",
+            operation="SolaX VPP trigger",
+            entity_id=trigger_entity,
+        )
+
     def set_solax_active_power_control(self, watts: int) -> None:
         """Issue a SolaX VPP active-power command.
 
@@ -2464,8 +2490,6 @@ class HomeAssistantAPIController:
         """
         mode_entity = self._get_entity_for_service("solax_power_control_mode")
         power_entity = self._get_entity_for_service("solax_active_power")
-        repeat_entity = self._get_entity_for_service("solax_autorepeat_duration")
-        trigger_entity = self._get_entity_for_service("solax_power_control_trigger")
 
         logger.info("SolaX VPP: enabling battery control, power=%d W", watts)
 
@@ -2480,13 +2504,35 @@ class HomeAssistantAPIController:
         # inverter, positive discharges the battery and negative charges it
         # (plugin_solax.py, key="remotecontrol_push_mode_power_8_9").
         self._set_number_like(power_entity, -watts, "SolaX VPP set active power")
-        self._set_number_like(repeat_entity, 1200, "SolaX VPP set autorepeat duration")
+        self._arm_solax_vpp_window()
+
+    def set_solax_no_discharge_hold(self) -> None:
+        """Hold the battery for one period via the vendor's no-discharge mode.
+
+        Selects "Enabled No Discharge" on the same mode 8/9 select the
+        push-power path uses, then arms the same autorepeat window.
+
+        Unlike that path this writes **no** push power: the mode derives its
+        own battery power from live PV and house load on every autorepeat
+        cycle (plugin_solax.py,
+        ``autorepeat_function_powercontrolmode8_recompute``) — surplus PV
+        charges the battery up to the BMS cap with the remainder exported, a
+        deficit holds SoC and imports the difference. That is the IDLE cost
+        model (``_idle_battery_flows``) exactly: passive solar credited, load
+        discharge never.
+        """
+        mode_entity = self._get_entity_for_service("solax_power_control_mode")
+
+        logger.info("SolaX VPP: holding battery (no-discharge mode)")
+
         self._service_call_with_retry(
-            "button",
-            "press",
-            operation="SolaX VPP trigger",
-            entity_id=trigger_entity,
+            "select",
+            "select_option",
+            operation="SolaX VPP enable no-discharge hold",
+            entity_id=mode_entity,
+            option="Enabled No Discharge",
         )
+        self._arm_solax_vpp_window()
 
     def set_solax_vpp_disabled(self) -> None:
         """Disable SolaX VPP mode, reverting the inverter to self-use behaviour.

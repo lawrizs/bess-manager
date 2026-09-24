@@ -1727,3 +1727,76 @@ class TestSolaxVppActivePowerControl:
             "button/press",
             {"entity_id": "button.solax_powercontrolmode8_trigger"},
         ) in calls
+
+
+class TestSolaxVppNoDischargeHold:
+    """The IDLE hold command written to solax_modbus.
+
+    Command-level like TestSolaxVppActivePowerControl above, and for the same
+    reason: no SolaX execution model exists in this codebase, so the vendor
+    mapping is the only observable.
+    """
+
+    def test_selects_the_no_discharge_option(
+        self, solax_ctrl: HomeAssistantAPIController
+    ) -> None:
+        """Pinned against remotecontrol_power_control_mode's real option_dict
+        (plugin_solax.py, option 85) -- the same contract
+        test_selects_an_option_the_mode_8_entity_actually_offers pins for the
+        push-power path.
+        """
+        post = _session_method_mock("post", _mock_response({}))
+
+        with patch.object(solax_ctrl.session, "post", post):
+            solax_ctrl.set_solax_no_discharge_hold()
+
+        selected = [
+            payload["option"]
+            for path, payload in _posted_services(post)
+            if path == "select/select_option"
+        ]
+        assert selected == ["Enabled No Discharge"]
+
+    def test_arms_autorepeat_and_fires_the_mode_8_trigger(
+        self, solax_ctrl: HomeAssistantAPIController
+    ) -> None:
+        """The hold needs the same dead-man window as every other command:
+        stop writing and the inverter reverts to self-use on its own.
+        """
+        post = _session_method_mock("post", _mock_response({}))
+
+        with patch.object(solax_ctrl.session, "post", post):
+            solax_ctrl.set_solax_no_discharge_hold()
+
+        calls = _posted_services(post)
+        assert (
+            "number/set_value",
+            {
+                "entity_id": "number.solax_remotecontrol_autorepeat_duration",
+                "value": 1200,
+            },
+        ) in calls
+        assert (
+            "button/press",
+            {"entity_id": "button.solax_powercontrolmode8_trigger"},
+        ) in calls
+
+    def test_writes_no_push_power(self, solax_ctrl: HomeAssistantAPIController) -> None:
+        """ "Enabled No Discharge" derives its own battery power from live PV
+        and house load on every autorepeat cycle
+        (autorepeat_function_powercontrolmode8_recompute), so a push power
+        written here would be recomputed away -- leaving the write path
+        reporting a command the inverter never ran.
+        """
+        post = _session_method_mock("post", _mock_response({}))
+
+        with patch.object(solax_ctrl.session, "post", post):
+            solax_ctrl.set_solax_no_discharge_hold()
+
+        power_writes = [
+            payload
+            for path, payload in _posted_services(post)
+            if payload.get("entity_id")
+            == "number.solax_remotecontrol_push_mode_power_8_9"
+        ]
+        assert power_writes == []
