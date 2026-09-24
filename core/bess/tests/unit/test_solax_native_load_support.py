@@ -139,15 +139,30 @@ class TestEveryOtherIntentIsUntouched:
         hw.set_solax_vpp_disabled.assert_not_called()
 
     @pytest.mark.parametrize("enabled", [False, True])
-    @pytest.mark.parametrize("intent", ["IDLE", "SOLAR_STORAGE"])
-    def test_intents_that_already_hand_over_are_unchanged(
-        self, controller: SolaxController, enabled: bool, intent: str
+    def test_solar_storage_hands_over_whatever_the_flag_says(
+        self, controller: SolaxController, enabled: bool
     ) -> None:
         controller.battery_settings.solax_native_load_support_enabled = enabled
 
-        hw = _apply(controller, intent, discharge_rate=0)
+        hw = _apply(controller, "SOLAR_STORAGE", discharge_rate=0)
 
         hw.set_solax_vpp_disabled.assert_called_once()
+        hw.set_solax_active_power_control.assert_not_called()
+
+    @pytest.mark.parametrize("enabled", [False, True])
+    def test_idle_holds_whatever_the_flag_says(
+        self, controller: SolaxController, enabled: bool
+    ) -> None:
+        """IDLE commands the no-discharge hold rather than handing the period
+        over, but that is the IDLE hold's doing, not native load support's --
+        what this class asserts is that the flag reaches LOAD_SUPPORT and
+        nothing else, and the command must be identical either way."""
+        controller.battery_settings.solax_native_load_support_enabled = enabled
+
+        hw = _apply(controller, "IDLE", discharge_rate=0)
+
+        hw.set_solax_no_discharge_hold.assert_called_once()
+        hw.set_solax_vpp_disabled.assert_not_called()
         hw.set_solax_active_power_control.assert_not_called()
 
 
