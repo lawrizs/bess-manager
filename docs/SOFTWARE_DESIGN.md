@@ -532,7 +532,7 @@ Both the official HA Nordpool integration and the older HACS custom component (`
 1. **Stage 3** checks `config_entries/get` for a loaded `nordpool` config entry. If found, the official integration is available and its `config_entry_id` is stored.
 2. **The user selects** which provider to use in the Setup Wizard or Settings page (radio button: "Nord Pool (official HA integration)" vs "Nord Pool (HACS custom sensor)").
 3. **At runtime**, the selected provider determines how prices are fetched:
-   - `nordpool_official`: Calls `nordpool.get_prices_for_date` service action (requires `config_entry_id`)
+   - `nordpool_official`: Calls `nordpool.get_prices_for_date` service action (requires `config_entry_id`). That service is keyed by Nord Pool's **CET delivery day** (`deliveryDateCET`), not the user's local day, and every entry carries UTC `start`/`end`. The source therefore derives which delivery days overlap the local day, fetches each, and maps every quarterly period to the entry whose `[start, end)` contains it. For a CET area that is one delivery day and an identity mapping; for an EET area (LT/LV/EE/FI, CET+1) the local day also needs the previous delivery day, whose final hour is local 00:00-01:00. Reading the response positionally instead put every EET price one hour early and never fetched that first hour at all.
    - `nordpool`: Reads quarterly prices from a single sensor entity's attributes. The timestamp-validated `raw_today`/`raw_tomorrow` arrays are preferred; otherwise it falls back to the plain `today`/`tomorrow` lists (VAT stripped). Tomorrow's plain list is used only when the sensor's `tomorrow_valid` attribute is true — before Nordpool publishes next-day prices it stays false while `tomorrow` still mirrors `today`, which if trusted inflated cached prices by the VAT multiplier (issue #704).
 
 #### Stage 2 — Intermediate Identifiers from Entity IDs
@@ -866,7 +866,7 @@ mock-run.sh                 ← starts Docker Compose
 |---|---|
 | `entity_snapshot` | Verbatim `/api/states/{entity_id}` responses for every sensor BESS reads |
 | `historical_periods` | Actual measured energy flows — seeded directly into the historical store, no recorder query needed |
-| `price_data` | Raw quarterly prices for `nordpool_official` service call responses |
+| `price_data` | Raw quarterly prices for `nordpool_official` service call responses, authored as **local**-day arrays (index 0 = local 00:00); mock-HA lays them on a UTC timeline and serves whichever CET delivery day is asked for |
 | `addon_options` | Complete sensor entity IDs, inverter device ID, price provider config |
 | `inverter_tou_segments` | Current inverter memory state for `read_time_segments` responses |
 | `export_timestamp` + `timezone` | Pins `mock_time` so BESS computes the same optimization period |
