@@ -13,9 +13,10 @@ import json
 import logging
 import os
 import re
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
@@ -51,6 +52,8 @@ _ac_discharge_times: dict[str, Any] = {}
 _service_log: list[dict] = []
 # Nordpool prices keyed by date string "YYYY-MM-DD" → list of quarterly prices (SEK/kWh)
 _nordpool_prices: dict[str, list[float]] = {}
+# Nord Pool delivery days run 00:00-24:00 market time; Europe/Oslo tracks it.
+_MARKET_TZ = ZoneInfo("Europe/Oslo")
 # IANA timezone name for this scenario (e.g. "Europe/Stockholm")
 _timezone: str = "UTC"
 # WebSocket registry data — populated from scenario or auto-generated from sensors
@@ -422,6 +425,62 @@ def _make_state_response(entity_id: str, value: Any) -> dict:
     }
 
 
+def _nordpool_delivery_day(requested_date: str) -> list[dict]:
+    """Entries of one CET delivery day, as the real HA service returns them.
+
+    Scenario price arrays are authored as LOCAL days. The real
+    nordpool.get_prices_for_date is keyed by Nord Pool's delivery day, which
+    runs 00:00-24:00 market time, and every entry carries UTC start/end. So lay
+    each local day on a UTC timeline and return the slice the requested
+    delivery day covers — for a CET scenario that is the same 96 periods it
+    always was, and for an EET one the two differ by an hour, which is the
+    whole point.
+
+    A partial slice is correct and expected: an EET local day needs only the
+    final hour of the previous delivery day.
+    """
+    try:
+        requested = date.fromisoformat(requested_date)
+    except ValueError:
+        return []
+
+    window_start = datetime.combine(
+        requested, time(0, 0), tzinfo=_MARKET_TZ
+    ).astimezone(UTC)
+    window_end = datetime.combine(
+        requested + timedelta(days=1), time(0, 0), tzinfo=_MARKET_TZ
+    ).astimezone(UTC)
+
+    local_tz = ZoneInfo(_timezone)
+    entries: list[tuple[datetime, datetime, float]] = []
+    for local_date_str, prices_kwh in _nordpool_prices.items():
+        if not prices_kwh:
+            continue
+        local_date = date.fromisoformat(local_date_str)
+        day_start = datetime.combine(
+            local_date, time(0, 0), tzinfo=local_tz
+        ).astimezone(UTC)
+        day_end = datetime.combine(
+            local_date + timedelta(days=1), time(0, 0), tzinfo=local_tz
+        ).astimezone(UTC)
+        step = (day_end - day_start) / len(prices_kwh)
+        for index, price in enumerate(prices_kwh):
+            start = day_start + step * index
+            if window_start <= start < window_end:
+                entries.append((start, start + step, price))
+
+    entries.sort(key=lambda entry: entry[0])
+    return [
+        {
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            # OfficialNordpoolSource expects [Currency]/MWh and divides by 1000.
+            "price": round(price * 1000, 4),
+        }
+        for start, end, price in entries
+    ]
+
+
 @app.get("/api/config")
 async def get_config() -> JSONResponse:
     """Return HA configuration including the scenario timezone."""
@@ -532,12 +591,11 @@ async def call_service(domain: str, service: str, request: Request) -> JSONRespo
     # Return service-specific responses for read operations
     if domain == "nordpool" and service == "get_prices_for_date":
         requested_date = body.get("date", "")
-        prices_kwh = _nordpool_prices.get(requested_date, [])
-        if prices_kwh:
-            # OfficialNordpoolSource expects prices in MWh (it divides by 1000 to get kWh).
+        entries = _nordpool_delivery_day(requested_date)
+        if entries:
             # Use area code extracted from the nordpool sensor key (e.g. "SE4" from
-            # sensor.nordpool_kwh_se4_sek_...). OfficialNordpoolSource ignores the key
-            # name, but using the real area keeps the response consistent.
+            # sensor.nordpool_kwh_se4_sek_...). OfficialNordpoolSource resolves the
+            # response by this key, so it has to be the real area.
             area = next(
                 (
                     _match.group(1).upper()
@@ -546,9 +604,8 @@ async def call_service(domain: str, service: str, request: Request) -> JSONRespo
                 ),
                 "prices",
             )
-            entries = [{"price": round(p * 1000, 4)} for p in prices_kwh]
             return JSONResponse({"service_response": {area: entries}})
-        logger.warning("No nordpool prices for date: %s", requested_date)
+        logger.warning("No nordpool prices for delivery date: %s", requested_date)
         return JSONResponse({})
 
     if domain == "growatt_server":

@@ -638,27 +638,48 @@ class TestNordpoolServiceContract:
 
     def _call_nordpool(self, target_date: date) -> MagicMock:
         """Call get_prices_for_date with a mocked HA controller."""
+        from datetime import UTC, datetime, time, timedelta
+
+        from core.bess import time_utils as _time_utils
         from core.bess.official_nordpool_source import OfficialNordpoolSource
+
+        # Hourly entries covering the whole local day in UTC, so the
+        # bisect-based coverage check in get_prices_for_date is satisfied
+        # regardless of local timezone/DST offset.
+        day_start = datetime.combine(
+            target_date, time(0, 0), tzinfo=_time_utils.TIMEZONE
+        ).astimezone(UTC)
+        day_end = datetime.combine(
+            target_date + timedelta(days=1), time(0, 0), tzinfo=_time_utils.TIMEZONE
+        ).astimezone(UTC)
+        entries = []
+        hour_start = day_start
+        while hour_start < day_end:
+            hour_end = hour_start + timedelta(hours=1)
+            entries.append(
+                {
+                    "start": hour_start.isoformat(),
+                    "end": hour_end.isoformat(),
+                    "price": 612.0,
+                }
+            )
+            hour_start = hour_end
 
         ha_controller = MagicMock()
         ha_controller._service_call_with_retry.return_value = {
-            "service_response": {
-                "SE4": [
-                    {
-                        "start": f"{target_date}T22:00:00+00:00",
-                        "end": f"{target_date}T23:00:00+00:00",
-                        "price": 612.0,
-                    }
-                ]
-                * 96
-            }
+            "service_response": {"SE4": entries}
         }
 
         source = OfficialNordpoolSource(ha_controller, "test-config-entry-id", 1.25)
 
-        # Patch time_utils so the date-range guard accepts our target_date.
-        with patch("core.bess.official_nordpool_source.time_utils") as mock_time:
-            mock_time.today.return_value = target_date
+        # Patch only time_utils.today so the date-range guard accepts our
+        # target_date; the delivery-day mapping needs the real TIMEZONE,
+        # get_period_count, and INTERVAL_MINUTES, so the module itself must
+        # not be replaced wholesale.
+        with patch(
+            "core.bess.official_nordpool_source.time_utils.today",
+            return_value=target_date,
+        ):
             source.get_prices_for_date(target_date)
 
         return ha_controller
