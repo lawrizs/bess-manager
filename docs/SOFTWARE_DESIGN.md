@@ -294,6 +294,8 @@ The DP algorithm uses **backward induction** to find the globally optimal batter
 
 **`charging_power_rate` limitation**: this settings-page value only seeds the initial charge-power target before the first control cycle; every cycle after that, `adjust_charging_power()` (`core/bess/battery_system_manager.py:2037-2064`) derives the actual hardware rate from `INTENT_TO_CONTROL` (always 0% or 100%), never re-reading the configured percentage. Tracked as a known bug in `TODO.md`, not a documented feature.
 
+**Flexible load**: an opt-in every-minute loop (`core/bess/flexible_load.py`, `BatterySystemManager.apply_flexible_load`) switches a controllable load such as a water heater on when the battery is full and grid export covers its rated draw plus a margin, and off as soon as grid import or battery discharge exceeds the margin. It never informs the DP; the heater is visible only through measured flows, and its energy is excluded from the learned baseline via `home.managed_load_sensors`.
+
 **Discharge inhibit**: an externally detected `binary_sensor` (entity ID suffix `_charging`/`_is_charging`) can force `discharge_rate` to 0 independent of the DP schedule, polled every minute (`core/bess/battery_system_manager.py:3089-3113`) and applied at schedule-write time (`core/bess/battery_system_manager.py:2578-2582`). This is the most common reason observed hardware behavior diverges from the planned schedule.
 
 **Transition**: Each action updates SOE accounting for charging/discharging efficiency losses, and updates the cost basis of stored energy. Cost basis is a **weighted average**, not FIFO — there is no queue of cost "layers". On charge: `new_cost_basis = (soe * cost_basis + new_energy_cost) / next_soe` (`core/bess/dp_battery_algorithm.py:496-498`). On discharge, `cost_basis` is left unchanged.
@@ -405,7 +407,7 @@ All other settings are stored in this file and managed via the settings API. Top
 
 - **`battery`**: `total_capacity`, `min_soc`, `max_soc`, `max_charge_power_kw`, `max_discharge_power_kw`, `cycle_cost_per_kwh`, `charging_power_rate`, `efficiency_charge`, `efficiency_discharge`
 - **`electricity_price`**: `area`, `markup_rate`, `vat_multiplier`, `additional_costs`, `tax_reduction`, `use_actual_price`
-- **`home`**: `max_fuse_current`, `voltage`, `safety_margin`, `phase_count`, `default_hourly`, `currency`, `consumption_strategy`, `power_monitoring_enabled`
+- **`home`**: `max_fuse_current`, `voltage`, `safety_margin`, `phase_count`, `default_hourly`, `currency`, `consumption_strategy`, `power_monitoring_enabled`, `flexible_load_enabled`, `flexible_load_rated_power_w`, `flexible_load_surplus_margin_w`, `flexible_load_min_off_minutes`
 - **`growatt`**: Inverter device ID and integration settings
 - **`sensors`**: Entity ID mappings for all Home Assistant sensors
 - **`energy_provider`**: Price source selection (Nordpool or Octopus Energy) and area configuration

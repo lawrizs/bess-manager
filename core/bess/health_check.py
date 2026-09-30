@@ -483,6 +483,10 @@ def run_system_health_checks(system_manager):
         )
         all_component_checks.append(discharge_check)
 
+    # 7. Flexible Load (solar-surplus controllable load) — only when enabled
+    if system_manager._flexible_load is not None:
+        all_component_checks.extend(system_manager._flexible_load.check_health())
+
     # Failure statistics from runtime tracker
     failure_stats = system_manager._runtime_failure_tracker.get_failure_stats()
 

@@ -43,6 +43,7 @@ Something look off? The built-in AI Analyst explains every decision in plain lan
 | **Fuse protection** | Plans schedules and monitors real-time grid current to keep charging within your main fuse's limit |
 | **Peak shaving** | Cap grid import during a configured time window, independent of price — for capacity/demand tariffs that charge by your peak import power |
 | **EV aware** | Automatically pauses battery discharge when your EV is charging |
+| **Flexible load** | Runs a water heater or other switchable load on solar surplus once the battery is full, and stops it before the battery or the grid pays |
 | **Planned loads** | Declare upcoming EV charging or other known consumption changes so forecasts — and the dashboard — account for them, then check what happened against the plan |
 | **Re-optimization** | Continuously updates as prices, solar, and consumption data change |
 | **AI Analyst** | Chat with your battery system — ask questions, get explanations |

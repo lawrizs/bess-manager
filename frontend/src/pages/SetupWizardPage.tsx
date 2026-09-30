@@ -102,6 +102,10 @@ const SetupWizardPage: React.FC = () => {
     powerMonitoringEnabled: false,
     gridExportPowerLimitKw: 0,
     managedLoadSensors: [],
+    flexibleLoadEnabled: false,
+    flexibleLoadRatedPowerW: 2200,
+    flexibleLoadSurplusMarginW: 200,
+    flexibleLoadMinOffMinutes: 5,
     peakShavingEnabled: false,
     peakShavingStartTime: '07:00',
     peakShavingEndTime: '20:00',
@@ -333,6 +337,10 @@ const SetupWizardPage: React.FC = () => {
         powerMonitoringEnabled: home.powerMonitoringEnabled ?? f.powerMonitoringEnabled,
         gridExportPowerLimitKw: home.gridExportPowerLimitKw ?? f.gridExportPowerLimitKw,
         managedLoadSensors:     home.managedLoadSensors     ?? f.managedLoadSensors,
+        flexibleLoadEnabled:    home.flexibleLoadEnabled    ?? f.flexibleLoadEnabled,
+        flexibleLoadRatedPowerW: home.flexibleLoadRatedPowerW ?? f.flexibleLoadRatedPowerW,
+        flexibleLoadSurplusMarginW: home.flexibleLoadSurplusMarginW ?? f.flexibleLoadSurplusMarginW,
+        flexibleLoadMinOffMinutes: home.flexibleLoadMinOffMinutes ?? f.flexibleLoadMinOffMinutes,
       }));
       setPricingForm(f => ({
         ...f,
@@ -428,6 +436,10 @@ const SetupWizardPage: React.FC = () => {
         powerMonitoringEnabled: homeForm.powerMonitoringEnabled,
         gridExportPowerLimitKw: homeForm.gridExportPowerLimitKw,
         managedLoadSensors: homeForm.managedLoadSensors.filter(Boolean),
+        flexibleLoadEnabled: homeForm.flexibleLoadEnabled,
+        flexibleLoadRatedPowerW: homeForm.flexibleLoadRatedPowerW,
+        flexibleLoadSurplusMarginW: homeForm.flexibleLoadSurplusMarginW,
+        flexibleLoadMinOffMinutes: homeForm.flexibleLoadMinOffMinutes,
         // Electricity
         area: discovery.nordpoolArea || discovery.nordpoolCustomArea || pricingForm.area,
         provider: pricingForm.provider,

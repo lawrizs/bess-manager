@@ -442,6 +442,14 @@ class BESSController:
             misfire_grace_time=30,  # Allow 30 seconds of misfire before warning
         )
 
+        # Flexible load control (every minute) — solar-surplus water heater
+        self.scheduler.add_job(
+            self.system.apply_flexible_load,
+            CronTrigger(minute="*"),
+            id="apply_flexible_load",
+            misfire_grace_time=30,
+        )
+
         # Live power-sample buffering for InfluxDB-free runtime gap-fill (#387)
         self.scheduler.add_job(
             self.system.sensor_collector.sample_live_power,

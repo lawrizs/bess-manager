@@ -31,6 +31,7 @@ from .exceptions import (
     SystemConfigurationError,
 )
 from .execution_model import PlatformCapabilities, intra_period_discharge_gate
+from .flexible_load import FlexibleLoadController
 from .growatt_min_controller import GrowattMinController
 from .growatt_sph_controller import GrowattSphController
 from .ha_api_controller import HomeAssistantAPIController
@@ -236,6 +237,7 @@ class BatterySystemManager:
 
         # Initialize monitors (created in start() if controller available)
         self._power_monitor = None
+        self._flexible_load: FlexibleLoadController | None = None
 
         # Current schedule tracking
         self._current_schedule = None
@@ -628,6 +630,13 @@ class BatterySystemManager:
                     and self._supports_charge_rate_control
                 ):
                     self._power_monitor = HomePowerMonitor(
+                        self._controller,
+                        home_settings=self.home_settings,
+                        battery_settings=self.battery_settings,
+                    )
+
+                if self.home_settings.flexible_load_enabled:
+                    self._flexible_load = FlexibleLoadController(
                         self._controller,
                         home_settings=self.home_settings,
                         battery_settings=self.battery_settings,
@@ -3957,6 +3966,34 @@ class BatterySystemManager:
         )
         self._last_applied_discharge_rate = target_rate
 
+    def apply_flexible_load(self) -> None:
+        """Run one flexible-load control tick. Called every minute by the scheduler."""
+        if not self.is_configured or self._flexible_load is None:
+            return
+        self._flexible_load.apply()
+
+    def flexible_load_status(self) -> dict:
+        """Dashboard view of the flexible load; only the flag when disabled."""
+        if self._flexible_load is None:
+            return {"enabled": False}
+        return self._flexible_load.status()
+
+    def _sync_flexible_load_controller(self) -> None:
+        """Create or drop the controller so a settings change needs no restart.
+
+        Dropping it never touches the switch: whatever state the load is in
+        stays, and the user's own HA automations take over.
+        """
+        enabled = self.home_settings.flexible_load_enabled
+        if enabled and self._flexible_load is None and self._controller is not None:
+            self._flexible_load = FlexibleLoadController(
+                self._controller,
+                home_settings=self.home_settings,
+                battery_settings=self.battery_settings,
+            )
+        elif not enabled and self._flexible_load is not None:
+            self._flexible_load = None
+
     def get_settings(self):
         """Get settings - return dataclasses directly for API layer conversion."""
         return {
@@ -4003,6 +4040,7 @@ class BatterySystemManager:
                 # strategy changes so the next optimization uses the new source.
                 if self.home_settings.consumption_strategy != prev_strategy:
                     self._consumption_predictions = None
+                self._sync_flexible_load_controller()
 
             if "price" in settings:
                 self.price_settings.update(**settings["price"])
