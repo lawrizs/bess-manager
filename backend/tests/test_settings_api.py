@@ -852,3 +852,73 @@ class TestDemoMode:
         _client.patch("/api/settings", json={"demoMode": {"enabled": True}})
         _client.patch("/api/settings", json={"demoMode": {"enabled": False}})
         inv.apply_period.assert_not_called()
+
+
+# ===========================================================================
+# Flexible load (solar-surplus water heater) — home section validation
+# ===========================================================================
+
+
+_FLEXIBLE_LOAD_SENSORS = {
+    "flexible_load_switch": "switch.tasmota",
+    "flexible_load_power": "sensor.tasmota_energy_power",
+}
+
+
+class TestFlexibleLoadValidation:
+    def test_enabling_without_its_sensors_is_refused(
+        self, mock_controller: MagicMock
+    ) -> None:
+        resp = _client.patch(
+            "/api/settings", json={"home": {"flexibleLoadEnabled": True}}
+        )
+        assert resp.status_code == 422
+        assert "flexible_load_switch" in resp.json()["detail"]
+        assert "flexible_load_power" in resp.json()["detail"]
+        mock_controller.settings_store.save_section.assert_not_called()
+
+    def test_enabling_with_sensors_is_persisted_snake_case_and_applied_live(
+        self, mock_controller: MagicMock
+    ) -> None:
+        mock_controller.settings_store.data["sensors"]["shared"] = dict(
+            _FLEXIBLE_LOAD_SENSORS
+        )
+        resp = _client.patch(
+            "/api/settings",
+            json={
+                "home": {
+                    "flexibleLoadEnabled": True,
+                    "flexibleLoadRatedPowerW": 2000,
+                    "flexibleLoadSurplusMarginW": 150,
+                    "flexibleLoadMinOffMinutes": 10,
+                }
+            },
+        )
+        assert resp.status_code == 200
+        saved = mock_controller.settings_store.save_section.call_args_list[-1][0][1]
+        assert saved["flexible_load_enabled"] is True
+        assert saved["flexible_load_rated_power_w"] == 2000
+        assert saved["flexible_load_surplus_margin_w"] == 150
+        assert saved["flexible_load_min_off_minutes"] == 10
+        live = mock_controller.system.update_settings.call_args[0][0]["home"]
+        assert live["flexible_load_enabled"] is True
+        assert live["flexible_load_rated_power_w"] == 2000
+
+    def test_unmapping_a_sensor_while_enabled_is_refused(
+        self, mock_controller: MagicMock
+    ) -> None:
+        mock_controller.settings_store.data["sensors"]["shared"] = dict(
+            _FLEXIBLE_LOAD_SENSORS
+        )
+        mock_controller.settings_store.data["home"]["flexible_load_enabled"] = True
+        resp = _client.patch(
+            "/api/settings",
+            json={
+                "sensors": {
+                    "platform": "growatt_server_min",
+                    "shared": {"flexible_load_switch": ""},
+                }
+            },
+        )
+        assert resp.status_code == 422
+        assert "flexible_load_switch" in resp.json()["detail"]

@@ -142,6 +142,7 @@ function isIntegrationFound(
   if (id === 'consumption_forecast') return !!shared['48h_avg_grid_import'];
   if (id === 'consumption_overlay') return !!shared['consumption_overlay'];
   if (id === 'discharge_inhibit') return !!shared['discharge_inhibit'];
+  if (id === 'flexible_load') return !!(shared['flexible_load_switch'] || shared['flexible_load_power']);
   return false;
 }
 

@@ -801,6 +801,13 @@ optimizer can change what the hardware actually does. Check these *before*
 concluding a mechanism is "missing" from the DP when observed behavior
 doesn't match the schedule:
 
+- **Flexible load** (`core/bess/flexible_load.py`): when enabled, a switchable
+  load (a water heater on a Tasmota relay) is turned on every minute the
+  battery is full and grid export covers its rated draw, and off once grid
+  import or battery discharge exceeds the margin. It is invisible to the DP;
+  on sunny days it shows up as higher measured load and lower export than
+  the plan, and as a battery-discharge blip in the minute or two before it
+  is switched off. See **Flexible Load**, below.
 - **Discharge inhibit sensor**: an external `binary_sensor` (auto-detected by
   entity ID suffix `_charging`/`_is_charging`, e.g. EV charging status) can
   force `discharge_rate` to 0 regardless of what the schedule says, checked
@@ -1055,6 +1062,46 @@ can only reduce recorded load, never invert it: an hour where the managed
 load's own draw exceeds the total load sensor's (a sensor/entity mismatch) is
 clamped to zero and logged, the same "surface it, don't absorb it" pattern
 the overlay uses for over-subtraction.
+
+### Flexible Load (solar-surplus water heater)
+
+A purely reactive control loop, not an optimizer input. `FlexibleLoadController`
+(`core/bess/flexible_load.py`) runs every minute from the scheduler
+(`BatterySystemManager.apply_flexible_load`), beside the discharge-inhibit
+job, and drives one switch entity (`flexible_load_switch`) from one power
+sensor (`flexible_load_power`) plus the battery SOC and the grid/battery power
+readings the dashboard already uses. Settings live on `HomeSettings`:
+`flexible_load_enabled`, `flexible_load_rated_power_w` (default 2200),
+`flexible_load_surplus_margin_w` (default 200), `flexible_load_min_off_minutes`
+(default 5).
+
+The rule (`desired_switch_state`) has two regimes, told apart by whether the
+load is actually drawing more than the margin:
+
+- **Drawing**: keep running unless someone other than the sun is paying —
+  grid import or battery discharge above the margin. Export is deliberately
+  not consulted: once the heater absorbs the surplus, export collapses to ~0
+  and the battery idles, which is the intended steady state.
+- **Not drawing** (switch off, or on with the thermostat satisfied): turn on
+  only if SOC ≥ `max_soc` − 1 pp and export ≥ rated + margin. Judging a
+  satisfied thermostat by the on-rule is what turns the relay off before the
+  element can re-engage against grid or battery once the surplus is gone.
+
+A decision must hold for two consecutive ticks before it is written, the
+switch is only written when it differs from the live HA state, and a turn-on
+additionally waits out `flexible_load_min_off_minutes` since the last command.
+Turn-off is never delayed by that dwell. Unreadable power/SOC readings switch
+the load off at once (fail closed); an unreadable switch state writes nothing.
+Disabling the feature drops the controller without touching the switch.
+
+**What the optimizer sees**: nothing directly. Measured load rises and export
+falls while the heater runs, so `SensorCollector` records honest actuals and
+the prediction analyzer will flag consumption misses on sunny days. Keep the
+heater's cumulative energy sensor in `home.managed_load_sensors` so the
+`ha_statistics` baseline does not learn to expect it; the `load_power_7d_avg`
+strategy has no exclusion mechanism and will slowly inflate. Known limitation:
+under an active export cap or price-floor curtailment, `export_power` reads
+~0 even when free surplus exists, so the on-rule never fires.
 
 
 ## Savings Calculation

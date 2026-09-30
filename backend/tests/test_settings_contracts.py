@@ -364,8 +364,18 @@ _BATTERY_OPTIONAL_FIELDS = frozenset(
 # issue #706 — requiring it at startup would break every existing install.
 # grid_export_power_limit_kw defaults to 0 (no DSO export ceiling), so every
 # settings.json written before it existed stays valid.
+# The flexible_load_* fields default to disabled/valid values so every
+# settings.json written before the feature existed stays valid.
 _HOME_OPTIONAL_FIELDS = frozenset(
-    {"min_valid", "managed_load_sensors", "grid_export_power_limit_kw"}
+    {
+        "min_valid",
+        "managed_load_sensors",
+        "grid_export_power_limit_kw",
+        "flexible_load_enabled",
+        "flexible_load_rated_power_w",
+        "flexible_load_surplus_margin_w",
+        "flexible_load_min_off_minutes",
+    }
 )
 
 

@@ -16,6 +16,12 @@ export interface HomeForm {
    * to exclude from the ha_statistics baseline before it is computed —
    * see issue #706. Empty by default; only meaningful for that strategy. */
   managedLoadSensors: string[];
+  /** Solar-surplus flexible load — a switchable load such as a water heater
+   * that runs only on solar the house would otherwise export. */
+  flexibleLoadEnabled: boolean;
+  flexibleLoadRatedPowerW: number;
+  flexibleLoadSurplusMarginW: number;
+  flexibleLoadMinOffMinutes: number;
   /** Peak-shaving grid-import cap during a configured window (issue #96,
    * Option B) — a generic peak-fighting control, independent of spot price. */
   peakShavingEnabled: boolean;
@@ -139,6 +145,8 @@ export function HomeFormSection({ form, onChange, sensors }: Props) {
   const currentSensorsConfigured = form.phaseCount === 1
     ? Boolean(sensors?.['current_l1'])
     : Boolean(sensors?.['current_l1']) && Boolean(sensors?.['current_l2']) && Boolean(sensors?.['current_l3']);
+  const flexibleLoadSensorsConfigured =
+    Boolean(sensors?.['flexible_load_switch']) && Boolean(sensors?.['flexible_load_power']);
   return (
     <div className="space-y-3">
       <SectionCard
@@ -269,6 +277,38 @@ export function HomeFormSection({ form, onChange, sensors }: Props) {
           and solar surplus that can neither be exported nor stored is reported as clipped
           rather than sold. Because energy that cannot leave is worth keeping, a limit here
           makes charging from surplus solar more attractive.
+        </p>
+      </SectionCard>
+
+      <SectionCard
+        title="Flexible Load"
+        description="Run a switchable load — typically an electric water heater — on solar you would otherwise export. It turns on once the battery is full and export covers the load's draw, and off as soon as the battery or the grid would pay for it."
+      >
+        {!flexibleLoadSensorsConfigured && (
+          <p className="text-xs text-amber-600 dark:text-amber-400">
+            Requires the <strong>Flexible Load Switch</strong> and <strong>Flexible Load Power</strong> entities
+            to be configured in the <strong>Sensors</strong> tab under Flexible Load first.
+          </p>
+        )}
+        {toggle('Enable flexible load', form.flexibleLoadEnabled,
+          v => onChange({ ...form, flexibleLoadEnabled: v }),
+          { disabled: !form.flexibleLoadEnabled && !flexibleLoadSensorsConfigured })}
+        {form.flexibleLoadEnabled && (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
+            {numField('Rated Power', form.flexibleLoadRatedPowerW,
+              v => onChange({ ...form, flexibleLoadRatedPowerW: v }), { unit: 'W', min: 1, step: 10 })}
+            {numField('Surplus Margin', form.flexibleLoadSurplusMarginW,
+              v => onChange({ ...form, flexibleLoadSurplusMarginW: v }), { unit: 'W', min: 0, step: 10 })}
+            {numField('Minimum Off Time', form.flexibleLoadMinOffMinutes,
+              v => onChange({ ...form, flexibleLoadMinOffMinutes: Math.round(v) }), { unit: 'min', min: 0, step: 1 })}
+          </div>
+        )}
+        <p className="text-xs text-gray-500 dark:text-gray-400 pt-1">
+          Turns on when the battery is at its maximum SOC and grid export is at least the rated power
+          plus the margin; turns off when grid import or battery discharge exceeds the margin. Checked
+          every minute, with a two-minute confirmation and the minimum off time guarding the relay.
+          Add the load's total-energy sensor to <strong>Managed load sensors</strong> above so the
+          learned consumption baseline does not come to expect it.
         </p>
       </SectionCard>
 

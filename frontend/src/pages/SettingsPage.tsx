@@ -54,6 +54,8 @@ const EMPTY_HOME: HomeForm = {
   phaseCount: 3, powerMonitoringEnabled: true,
   gridExportPowerLimitKw: 0,
   managedLoadSensors: [],
+  flexibleLoadEnabled: false, flexibleLoadRatedPowerW: 2200,
+  flexibleLoadSurplusMarginW: 200, flexibleLoadMinOffMinutes: 5,
   peakShavingEnabled: false, peakShavingStartTime: '07:00', peakShavingEndTime: '20:00',
   peakShavingDays: [0, 1, 2, 3, 4], peakShavingMaxImportKw: 0,
 };
@@ -206,6 +208,10 @@ const SettingsPage: React.FC = () => {
         powerMonitoringEnabled: home_s.powerMonitoringEnabled ?? true,
         gridExportPowerLimitKw: home_s.gridExportPowerLimitKw ?? 0,
         managedLoadSensors: home_s.managedLoadSensors ?? [],
+        flexibleLoadEnabled: home_s.flexibleLoadEnabled ?? false,
+        flexibleLoadRatedPowerW: home_s.flexibleLoadRatedPowerW ?? 2200,
+        flexibleLoadSurplusMarginW: home_s.flexibleLoadSurplusMarginW ?? 200,
+        flexibleLoadMinOffMinutes: home_s.flexibleLoadMinOffMinutes ?? 5,
         peakShavingEnabled: home_s.peakShaving?.enabled ?? false,
         peakShavingStartTime: home_s.peakShaving?.startTime ?? '07:00',
         peakShavingEndTime: home_s.peakShaving?.endTime ?? '20:00',
@@ -434,6 +440,10 @@ const SettingsPage: React.FC = () => {
           // Drop blank rows left by "+ Add managed load sensor" — the API
           // rejects an empty string as an invalid entity ID.
           managedLoadSensors: homeForm.managedLoadSensors.filter(Boolean),
+          flexibleLoadEnabled: homeForm.flexibleLoadEnabled,
+          flexibleLoadRatedPowerW: homeForm.flexibleLoadRatedPowerW,
+          flexibleLoadSurplusMarginW: homeForm.flexibleLoadSurplusMarginW,
+          flexibleLoadMinOffMinutes: homeForm.flexibleLoadMinOffMinutes,
           currency: pricingForm.currency,
           peakShaving: {
             enabled: homeForm.peakShavingEnabled,

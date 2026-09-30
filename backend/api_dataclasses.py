@@ -1169,6 +1169,10 @@ class APISetupCompletePayload(BaseModel):
     powerMonitoringEnabled: bool | None = None
     gridExportPowerLimitKw: float | None = None
     managedLoadSensors: list[str] | None = None
+    flexibleLoadEnabled: bool | None = None
+    flexibleLoadRatedPowerW: float | None = None
+    flexibleLoadSurplusMarginW: float | None = None
+    flexibleLoadMinOffMinutes: int | None = None
     # Electricity price settings
     area: str | None = None
     markupRate: float | None = None

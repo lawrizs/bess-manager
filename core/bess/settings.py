@@ -283,12 +283,34 @@ class HomeSettings:
     # or without live current monitoring.
     grid_export_power_limit_kw: float = GRID_EXPORT_POWER_LIMIT_KW
     managed_load_sensors: list[str] = field(default_factory=list)
+    # Flexible load (solar-surplus water heater) -- see flexible_load.py.
+    # Disabled by default; the two sensors it needs are mapped in the
+    # Sensors tab (flexible_load_switch, flexible_load_power).
+    flexible_load_enabled: bool = False
+    flexible_load_rated_power_w: float = 2200.0
+    flexible_load_surplus_margin_w: float = 200.0
+    flexible_load_min_off_minutes: int = 5
 
     def __post_init__(self):
         assert self.phase_count in (
             1,
             3,
         ), f"phase_count must be 1 or 3, got {self.phase_count}"
+        if self.flexible_load_rated_power_w <= 0:
+            raise ValueError(
+                f"flexible_load_rated_power_w must be positive, "
+                f"got {self.flexible_load_rated_power_w}"
+            )
+        if self.flexible_load_surplus_margin_w < 0:
+            raise ValueError(
+                f"flexible_load_surplus_margin_w must be >= 0, "
+                f"got {self.flexible_load_surplus_margin_w}"
+            )
+        if self.flexible_load_min_off_minutes < 0:
+            raise ValueError(
+                f"flexible_load_min_off_minutes must be >= 0, "
+                f"got {self.flexible_load_min_off_minutes}"
+            )
         if self.grid_export_power_limit_kw < 0:
             raise ValueError(
                 f"grid_export_power_limit_kw must be >= 0 (0 disables the "

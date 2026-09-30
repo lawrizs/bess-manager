@@ -61,6 +61,8 @@ SHARED_SENSOR_KEYS = frozenset(
         "current_l3",
         "discharge_inhibit",
         "weather_entity",
+        "flexible_load_switch",
+        "flexible_load_power",
     }
 )
 
@@ -557,6 +559,10 @@ class SettingsStore:
                 "phase_count": 1,
                 "power_monitoring_enabled": False,
                 "grid_export_power_limit_kw": GRID_EXPORT_POWER_LIMIT_KW,
+                "flexible_load_enabled": False,
+                "flexible_load_rated_power_w": 2200.0,
+                "flexible_load_surplus_margin_w": 200.0,
+                "flexible_load_min_off_minutes": 5,
             },
             "electricity_price": {
                 "markup_rate": MARKUP_RATE,
@@ -708,6 +714,10 @@ class SettingsStore:
             # Add missing fields with defaults
             for key, default in (
                 ("grid_export_power_limit_kw", GRID_EXPORT_POWER_LIMIT_KW),
+                ("flexible_load_enabled", False),
+                ("flexible_load_rated_power_w", 2200.0),
+                ("flexible_load_surplus_margin_w", 200.0),
+                ("flexible_load_min_off_minutes", 5),
             ):
                 if key not in home:
                     home[key] = default

@@ -4,6 +4,12 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Flexible load: heat water with solar you would otherwise export** — map a switchable load such as a water heater and BESS turns it on once the battery is full and export covers its draw, and off again the moment the battery or the grid would pay. Enable under Settings → Home.
+
 ## [11.8.1-ls] - 2026-09-26
 
 ### Fixed

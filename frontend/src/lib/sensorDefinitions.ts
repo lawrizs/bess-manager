@@ -67,7 +67,7 @@ export interface PerPlatformSensors {
 /** IDs of non-inverter (shared) integrations. */
 export const SHARED_INTEGRATION_IDS = new Set([
   'nordpool', 'solar_forecast', 'consumption_forecast', 'consumption_overlay',
-  'phase_current', 'discharge_inhibit', 'weather',
+  'phase_current', 'discharge_inhibit', 'weather', 'flexible_load',
 ]);
 
 /** Create an empty per-platform sensors structure. */
@@ -596,6 +596,21 @@ export const INTEGRATIONS: IntegrationDef[] = [
         name: 'Constraint',
         sensors: [
           { key: 'discharge_inhibit', label: 'Discharge Inhibit Sensor', required: false },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'flexible_load',
+    name: 'Flexible Load',
+    required: false,
+    description: 'A switchable load (e.g. a water heater on a Tasmota relay) to run on solar surplus \u2014 the switch entity BESS toggles and the power sensor reporting its live draw. Not auto-detected; enter both manually, then enable it in Settings \u2192 Home',
+    sensorGroups: [
+      {
+        name: 'Load',
+        sensors: [
+          { key: 'flexible_load_switch', label: 'Flexible Load Switch', required: false },
+          { key: 'flexible_load_power', label: 'Flexible Load Power', required: false },
         ],
       },
     ],

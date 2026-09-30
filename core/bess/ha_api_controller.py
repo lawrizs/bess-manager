@@ -432,6 +432,21 @@ class HomeAssistantAPIController:
             "precision": 0,
             "conversion_threshold": None,
         },
+        # Flexible load (solar-surplus controllable load, e.g. a water heater)
+        "get_flexible_load_switch_on": {
+            "sensor_key": "flexible_load_switch",
+            "name": "Flexible Load Switch",
+            "unit": "binary",
+            "precision": 0,
+            "conversion_threshold": None,
+        },
+        "get_flexible_load_power": {
+            "sensor_key": "flexible_load_power",
+            "name": "Flexible Load Power",
+            "unit": "W",
+            "precision": 0,
+            "conversion_threshold": 1000,
+        },
     }
 
     # ── Entity Discovery Architecture ─────────────────────────────────────
@@ -1558,6 +1573,25 @@ class HomeAssistantAPIController:
             return False
         result = self._get_binary_state("discharge_inhibit")
         return result is True
+
+    def get_flexible_load_switch_on(self) -> bool | None:
+        """Current state of the flexible load's switch; None if unconfigured/unavailable."""
+        return self._get_binary_state("flexible_load_switch")
+
+    def get_flexible_load_power(self) -> float | None:
+        """Live draw of the flexible load in W; None if unconfigured/unavailable."""
+        return self._get_sensor_value("flexible_load_power")
+
+    def set_flexible_load_switch(self, on: bool) -> None:
+        """Turn the flexible load's switch on or off."""
+        entity_id = self._get_entity_for_service("flexible_load_switch")
+        self._service_call_with_retry(
+            "switch",
+            "turn_on" if on else "turn_off",
+            operation=f"Turn flexible load {'on' if on else 'off'}",
+            category="flexible_load",
+            entity_id=entity_id,
+        )
 
     def get_consumption_overlay_blocks(self) -> list[OverlayBlock]:
         """Read the user's declared changes to expected consumption (issue #428).

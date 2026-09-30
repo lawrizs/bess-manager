@@ -231,6 +231,31 @@ def _validate_consumption_strategy(home_section: dict, active_sensors: dict) -> 
         )
 
 
+def _validate_flexible_load_sensors(home_section: dict, active_sensors: dict) -> None:
+    """Raise HTTPException(422) if the flexible load is enabled without the
+    switch and power entities it drives.
+
+    Mirrors the frontend gating in HomeFormSection.tsx — the server-side
+    backstop so the API itself refuses the invalid combination regardless of
+    which client called it.
+    """
+    if not home_section.get("flexible_load_enabled"):
+        return
+    missing = [
+        key
+        for key in ("flexible_load_switch", "flexible_load_power")
+        if not active_sensors.get(key)
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Cannot enable the flexible load: missing required sensor(s): "
+                f"{', '.join(missing)}. Configure them in Settings → Sensors first."
+            ),
+        )
+
+
 def _validate_managed_load_sensors(home_section: dict) -> None:
     """Raise HTTPException(422) if managed_load_sensors isn't a list of entity IDs.
 
@@ -439,6 +464,7 @@ async def patch_settings(updates: dict):
                 _validate_power_monitoring_sensors(section, effective_sensors)
                 _validate_consumption_strategy(section, effective_sensors)
                 _validate_managed_load_sensors(section)
+                _validate_flexible_load_sensors(section, effective_sensors)
 
             if store_key == "sensors":
                 # A sensor removal (e.g. unmapping a phase-current sensor) can
@@ -450,6 +476,9 @@ async def patch_settings(updates: dict):
                     persisted_home, flatten_sensors(section)
                 )
                 _validate_consumption_strategy(persisted_home, flatten_sensors(section))
+                _validate_flexible_load_sensors(
+                    persisted_home, flatten_sensors(section)
+                )
 
             bess_controller.settings_store.save_section(store_key, section)
 
@@ -1183,6 +1212,7 @@ async def get_inverter_status():
             "charge_power_rate": charge_power_rate,
             "discharge_power_rate": discharge_power_rate,
             "discharge_inhibit_active": controller.get_discharge_inhibit_active(),
+            "flexible_load": bess_controller.system.flexible_load_status(),
             "inverter_platform": inverter_platform,
             "control_model": control_model,
             "timestamp": datetime.now().isoformat(),
@@ -3267,6 +3297,10 @@ async def setup_complete(payload: APISetupCompletePayload):
             "powerMonitoringEnabled": "power_monitoring_enabled",
             "gridExportPowerLimitKw": "grid_export_power_limit_kw",
             "managedLoadSensors": "managed_load_sensors",
+            "flexibleLoadEnabled": "flexible_load_enabled",
+            "flexibleLoadRatedPowerW": "flexible_load_rated_power_w",
+            "flexibleLoadSurplusMarginW": "flexible_load_surplus_margin_w",
+            "flexibleLoadMinOffMinutes": "flexible_load_min_off_minutes",
         }
         if any(getattr(payload, f) is not None for f in _HOME_MAP):
             home = bess_controller.settings_store.get_section("home")
@@ -3280,6 +3314,7 @@ async def setup_complete(payload: APISetupCompletePayload):
             _validate_power_monitoring_sensors(home, effective_sensors)
             _validate_consumption_strategy(home, effective_sensors)
             _validate_managed_load_sensors(home)
+            _validate_flexible_load_sensors(home, effective_sensors)
             sections["home"] = home
 
         # --- electricity price ---
@@ -3427,6 +3462,10 @@ async def setup_complete(payload: APISetupCompletePayload):
                     "phase_count": payload.phaseCount,
                     "power_monitoring_enabled": payload.powerMonitoringEnabled,
                     "managed_load_sensors": payload.managedLoadSensors,
+                    "flexible_load_enabled": payload.flexibleLoadEnabled,
+                    "flexible_load_rated_power_w": payload.flexibleLoadRatedPowerW,
+                    "flexible_load_surplus_margin_w": payload.flexibleLoadSurplusMarginW,
+                    "flexible_load_min_off_minutes": payload.flexibleLoadMinOffMinutes,
                 }
             )
         if "electricity_price" in sections:

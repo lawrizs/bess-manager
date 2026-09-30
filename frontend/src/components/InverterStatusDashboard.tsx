@@ -30,6 +30,7 @@ interface InverterStatus {
   chargePowerRate: number;
   dischargePowerRate: number;
   dischargeInhibitActive?: boolean;
+  flexibleLoad?: { enabled: boolean; switchOn?: boolean | null; powerW?: number | null };
   maxChargingPower: number;
   maxDischargingPower: number;
   gridChargeEnabled: boolean;
@@ -721,7 +722,16 @@ const InverterStatusDashboard: React.FC = () => {
               badge: inverterStatus?.dischargeInhibitActive
                 ? { text: 'Inhibited', color: 'yellow' as const }
                 : undefined,
-            }
+            },
+            ...(inverterStatus?.flexibleLoad?.enabled ? [{
+              label: "Flexible Load",
+              value: inverterStatus.flexibleLoad.switchOn
+                ? `On \u00b7 ${Math.round(inverterStatus.flexibleLoad.powerW ?? 0)} W`
+                : inverterStatus.flexibleLoad.switchOn === false ? 'Off' : 'Unavailable',
+              unit: "",
+              icon: Zap,
+              dimmed: !inverterStatus.flexibleLoad.switchOn,
+            }] : [])
           ]}
         />
       </div>
