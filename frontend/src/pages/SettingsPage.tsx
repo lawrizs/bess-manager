@@ -55,7 +55,8 @@ const EMPTY_HOME: HomeForm = {
   gridExportPowerLimitKw: 0,
   managedLoadSensors: [],
   peakShavingEnabled: false, peakShavingStartTime: '07:00', peakShavingEndTime: '20:00',
-  peakShavingDays: [0, 1, 2, 3, 4], peakShavingMaxImportKw: 0,
+  peakShavingAllDay: false,
+  peakShavingDays: [0, 1, 2, 3, 4], peakShavingMaxImportKw: 0, peakShavingFloorKw: 0,
 };
 const EMPTY_PRICING: PricingForm = {
   currency: 'SEK',
@@ -63,6 +64,13 @@ const EMPTY_PRICING: PricingForm = {
   nordpoolEntity: '',
   octopusImportTodayEntity: '', octopusImportTomorrowEntity: '',
   octopusExportTodayEntity: '', octopusExportTomorrowEntity: '',
+  octopusFreeImportPrice: 0,
+  octopusPowerUpCalendarEntity: '',
+  octopusPowerDownEnabled: false,
+  octopusPowerDownCalendarEntity: '',
+  octopusPowerDownExportKw: 1.0,
+  octopusPowerDownExportMinutes: 15,
+  octopusPowerDownEventsEntity: '',
   entsoeEntity: '',
   area: '', markupRate: 0, vatMultiplier: 1.25, additionalCosts: 0,
   taxReduction: 0, spotMultiplier: 1.0, exportSpotMultiplier: 1.0,
@@ -126,7 +134,9 @@ const SettingsPage: React.FC = () => {
     battery:
       JSON.stringify(batteryForm) !== savedBattery.current ||
       JSON.stringify(inverterForm) !== savedInverter.current,
-    sensors: stableStringify(sensors) !== savedSensors.current,
+    sensors:
+      stableStringify(sensors) !== savedSensors.current ||
+      JSON.stringify(inverterForm) !== savedInverter.current,
     system: demoEnabled !== savedDemoEnabled || JSON.stringify(aiForm) !== savedAi.current
       || lineStyle !== savedLineStyle,
   };
@@ -146,6 +156,7 @@ const SettingsPage: React.FC = () => {
   // ── auto-configure ────────────────────────────────────────────────────
   const [discovering, setDiscovering] = useState(false);
   const [lastDiscoveredAt, setLastDiscoveredAt] = useState<string | null>(null);
+  const [powerDownCalendarDisabledBy, setPowerDownCalendarDisabledBy] = useState<string | undefined>(undefined);
 
   // ── auto-dismiss toast ────────────────────────────────────────────────
   useEffect(() => {
@@ -209,8 +220,10 @@ const SettingsPage: React.FC = () => {
         peakShavingEnabled: home_s.peakShaving?.enabled ?? false,
         peakShavingStartTime: home_s.peakShaving?.startTime ?? '07:00',
         peakShavingEndTime: home_s.peakShaving?.endTime ?? '20:00',
+        peakShavingAllDay: home_s.peakShaving?.allDay ?? false,
         peakShavingDays: home_s.peakShaving?.days ?? [0, 1, 2, 3, 4],
         peakShavingMaxImportKw: home_s.peakShaving?.maxImportKw ?? 0,
+        peakShavingFloorKw: home_s.peakShaving?.floorKw ?? 0,
       };
       setHomeForm(h);
       savedHome.current = JSON.stringify(h);
@@ -224,6 +237,13 @@ const SettingsPage: React.FC = () => {
         octopusImportTomorrowEntity: octopus.importTomorrowEntity ?? '',
         octopusExportTodayEntity: octopus.exportTodayEntity ?? '',
         octopusExportTomorrowEntity: octopus.exportTomorrowEntity ?? '',
+        octopusFreeImportPrice: octopus.freeImportPrice ?? 0,
+        octopusPowerUpCalendarEntity: octopus.powerUpCalendarEntity ?? '',
+        octopusPowerDownEnabled: octopus.powerDownEnabled ?? false,
+        octopusPowerDownCalendarEntity: octopus.powerDownCalendarEntity ?? '',
+        octopusPowerDownExportKw: octopus.powerDownExportKw ?? 1.0,
+        octopusPowerDownExportMinutes: octopus.powerDownExportMinutes ?? 15,
+        octopusPowerDownEventsEntity: octopus.powerDownEventsEntity ?? '',
         entsoeEntity: entsoe.entity ?? '',
         area: elec_s.area ?? '',
         markupRate: elec_s.markupRate ?? 0,
@@ -365,8 +385,17 @@ const SettingsPage: React.FC = () => {
         if (d.currency && d.currency !== f.currency) {
           next.currency = d.currency; changed = true;
         }
+        // Prefill the Octoplus Power Down calendar / events entities only
+        // when not already configured — never clobber a saved value.
+        if (d.octopusEntities?.powerDownCalendar && !f.octopusPowerDownCalendarEntity) {
+          next.octopusPowerDownCalendarEntity = d.octopusEntities.powerDownCalendar; changed = true;
+        }
+        if (d.octopusEntities?.powerDownEvents && !f.octopusPowerDownEventsEntity) {
+          next.octopusPowerDownEventsEntity = d.octopusEntities.powerDownEvents; changed = true;
+        }
         return changed ? next : f;
       });
+      setPowerDownCalendarDisabledBy(d.octopusEntities?.powerDownCalendarDisabledBy);
 
       if (d.detectedPhaseCount) {
         setHomeForm(f => ({ ...f, phaseCount: d.detectedPhaseCount }));
@@ -439,8 +468,10 @@ const SettingsPage: React.FC = () => {
             enabled: homeForm.peakShavingEnabled,
             startTime: homeForm.peakShavingStartTime,
             endTime: homeForm.peakShavingEndTime,
+            allDay: homeForm.peakShavingAllDay,
             days: homeForm.peakShavingDays,
             maxImportKw: homeForm.peakShavingMaxImportKw,
+            floorKw: homeForm.peakShavingFloorKw,
           },
         },
       });
@@ -481,6 +512,13 @@ const SettingsPage: React.FC = () => {
             importTomorrowEntity: pricingForm.octopusImportTomorrowEntity,
             exportTodayEntity: pricingForm.octopusExportTodayEntity,
             exportTomorrowEntity: pricingForm.octopusExportTomorrowEntity,
+            freeImportPrice: pricingForm.octopusFreeImportPrice,
+            powerUpCalendarEntity: pricingForm.octopusPowerUpCalendarEntity,
+            powerDownEnabled: pricingForm.octopusPowerDownEnabled,
+            powerDownCalendarEntity: pricingForm.octopusPowerDownCalendarEntity,
+            powerDownExportKw: pricingForm.octopusPowerDownExportKw,
+            powerDownExportMinutes: pricingForm.octopusPowerDownExportMinutes,
+            powerDownEventsEntity: pricingForm.octopusPowerDownEventsEntity,
           },
           entsoe: { entity: pricingForm.entsoeEntity },
         },
@@ -494,6 +532,35 @@ const SettingsPage: React.FC = () => {
     } finally {
       setSaving(false);
     }
+  };
+
+  /** Inverter section of a PATCH payload — shared by every Save handler that
+   * can touch inverterForm (Battery tab and Integrations/Sensors tab both
+   * render inverter fields; #787 was this going stale in one of the two). */
+  const inverterPatchPayload = () => ({
+    ...(inverterForm.inverterPlatform === 'huawei_solar_luna2000'
+      ? {}
+      : { growatt: { deviceId: inverterForm.deviceId } }),
+    inverter: {
+      platform: inverterForm.inverterPlatform,
+      controlMode: inverterForm.controlMode ?? 'tou',
+      serviceDomain: inverterForm.serviceDomain ?? '',
+      ...(inverterForm.inverterPlatform === 'huawei_solar_luna2000'
+        ? { deviceId: inverterForm.deviceId }
+        : {}),
+    },
+  });
+
+  /** The effective service domain is computed server-side and changes when
+   * the platform or override does — take it from the save response rather
+   * than leaving the placeholder showing the value fetched at page load. */
+  const applyResolvedInverterDomain = (saved: { data?: { inverter?: { resolvedServiceDomain?: string } } }) => {
+    const resolved = saved.data?.inverter?.resolvedServiceDomain;
+    const updatedInverter = resolved === undefined
+      ? inverterForm
+      : { ...inverterForm, resolvedServiceDomain: resolved };
+    setInverterForm(updatedInverter);
+    savedInverter.current = JSON.stringify(updatedInverter);
   };
 
   const saveBattery = async () => {
@@ -521,29 +588,10 @@ const SettingsPage: React.FC = () => {
             weatherEntity: sensors.shared?.['weather_entity'] ?? '',
           },
         },
-        ...(inverterForm.inverterPlatform === 'huawei_solar_luna2000'
-          ? {}
-          : { growatt: { deviceId: inverterForm.deviceId } }),
-        inverter: {
-          platform: inverterForm.inverterPlatform,
-          controlMode: inverterForm.controlMode ?? 'tou',
-          serviceDomain: inverterForm.serviceDomain ?? '',
-          ...(inverterForm.inverterPlatform === 'huawei_solar_luna2000'
-            ? { deviceId: inverterForm.deviceId }
-            : {}),
-        },
+        ...inverterPatchPayload(),
       });
       savedBattery.current = JSON.stringify(batteryForm);
-      // The effective domain is computed server-side and changes when the
-      // platform or override does — take it from the save response rather
-      // than leaving the placeholder showing the value fetched at page load.
-      const resolved = (saved as { inverter?: { resolvedServiceDomain?: string } })
-        ?.inverter?.resolvedServiceDomain;
-      const updatedInverter = resolved === undefined
-        ? inverterForm
-        : { ...inverterForm, resolvedServiceDomain: resolved };
-      setInverterForm(updatedInverter);
-      savedInverter.current = JSON.stringify(updatedInverter);
+      applyResolvedInverterDomain(saved);
       setToast({ type: 'success', message: 'Battery settings saved.' });
     } catch (err) {
       setToast({ type: 'error', message: err instanceof Error ? err.message : 'Save failed.' });
@@ -555,7 +603,7 @@ const SettingsPage: React.FC = () => {
   const saveSensors = async () => {
     setSaving(true);
     try {
-      await api.patch('/api/settings', {
+      const saved = await api.patch('/api/settings', {
         sensors,
         energyProvider: {
           provider: pricingForm.provider,
@@ -566,12 +614,21 @@ const SettingsPage: React.FC = () => {
             importTomorrowEntity: pricingForm.octopusImportTomorrowEntity,
             exportTodayEntity: pricingForm.octopusExportTodayEntity,
             exportTomorrowEntity: pricingForm.octopusExportTomorrowEntity,
+            freeImportPrice: pricingForm.octopusFreeImportPrice,
+            powerUpCalendarEntity: pricingForm.octopusPowerUpCalendarEntity,
+            powerDownEnabled: pricingForm.octopusPowerDownEnabled,
+            powerDownCalendarEntity: pricingForm.octopusPowerDownCalendarEntity,
+            powerDownExportKw: pricingForm.octopusPowerDownExportKw,
+            powerDownExportMinutes: pricingForm.octopusPowerDownExportMinutes,
+            powerDownEventsEntity: pricingForm.octopusPowerDownEventsEntity,
           },
           entsoe: { entity: pricingForm.entsoeEntity },
         },
+        ...inverterPatchPayload(),
       });
       savedSensors.current = stableStringify(sensors);
       savedPricing.current = JSON.stringify(pricingForm);
+      applyResolvedInverterDomain(saved);
       const failed = await checkAndUpdateSensorHealth(getActiveSensorsFlat(sensors));
       if (failed.length > 0) {
         setToast({
@@ -727,7 +784,11 @@ const SettingsPage: React.FC = () => {
 
           {/* ── Electricity Pricing ──────────────────────────────────────── */}
           {tab === 'pricing' && (
-            <PricingFormSection form={pricingForm} onChange={setPricingForm} />
+            <PricingFormSection
+              form={pricingForm}
+              onChange={setPricingForm}
+              powerDownCalendarDisabledBy={powerDownCalendarDisabledBy}
+            />
           )}
 
           {/* ── Battery ──────────────────────────────────────────────────── */}

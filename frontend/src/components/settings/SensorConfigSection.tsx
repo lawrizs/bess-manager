@@ -77,6 +77,11 @@ export interface DiscoveryResult {
     importTomorrow?: string;
     exportToday?: string;
     exportTomorrow?: string;
+    powerUpCalendar?: string;
+    powerUpCalendarDisabledBy?: string;
+    powerDownCalendar?: string;
+    powerDownCalendarDisabledBy?: string;
+    powerDownEvents?: string;
   };
   entsoeFound: boolean;
   entsoeEntity: string | null;
@@ -141,6 +146,7 @@ function isIntegrationFound(
   if (id === 'weather') return !!shared['weather_entity'];
   if (id === 'consumption_forecast') return !!shared['48h_avg_grid_import'];
   if (id === 'consumption_overlay') return !!shared['consumption_overlay'];
+  if (id === 'peak_shaving_month_peak') return !!shared['peak_shaving_month_peak'];
   if (id === 'discharge_inhibit') return !!shared['discharge_inhibit'];
   return false;
 }

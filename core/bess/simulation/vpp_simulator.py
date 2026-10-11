@@ -37,6 +37,7 @@ from core.bess.dp_battery_algorithm import (
 )
 from core.bess.settings import BatterySettings
 from core.bess.solax_modbus_growatt_controller import SolaxModbusGrowattController
+from core.bess.strategic_intent import idle_hold_releasable
 from core.bess.vpp_load_tracking import budget_for_period
 
 
@@ -143,6 +144,7 @@ def _derive_vpp_command(
     action_kw: float,
     at_reserve_floor: bool,
     tracking_budget_kwh: float | None = None,
+    discharge_authorized: bool = False,
 ) -> VppCommand:
     """One period's command, via the same two production calls
     `BatterySystemManager._apply_period_schedule` makes.
@@ -152,6 +154,12 @@ def _derive_vpp_command(
     the plan -- neither of which `_intent_to_vpp` sees. Passing it in keeps
     the controller a stateless mapper, which is the same ownership split
     production uses (BSM drives, controller maps).
+
+    `discharge_authorized` (#786) is `idle_hold_releasable` of the period's
+    verdict and planned import, handed to the mapper as production does: it
+    releases an IDLE hold that was a fall-through, not a choice. It is a separate input from the tracking budget -- the
+    budget exists only for LOAD_SUPPORT and only when the user opted in, where
+    this applies to IDLE whatever the setting.
     """
     grid_charge, discharge_rate, block_passive_charging = (
         controller.compute_rates_for_period(period, action_kw)
@@ -163,6 +171,7 @@ def _derive_vpp_command(
         controller.strategic_intents[period],
         at_reserve_floor,
         load_tracking_active=tracking_budget_kwh is not None,
+        discharge_authorized=discharge_authorized,
     )
     return VppCommand(
         power_pct=power_pct,
@@ -418,6 +427,7 @@ def simulate_vpp(
     currency: str = "SEK",
     intra_period_discharge_allowed: list[bool] | None = None,
     export_cap_kwh: float | None = None,
+    planned_grid_imported_kwh: list[float] | None = None,
 ) -> VppSimulationResult:
     """Execute a VPP command sequence, carrying SoE forward, using the
     optimizer's own flow and accounting primitives -- same arrangement as
@@ -432,12 +442,26 @@ def simulate_vpp(
 
     To execute a command list that no plan would produce -- a hypothetical, to
     contrast against what production actually writes -- use
-    `simulate_vpp_commands` instead."""
+    `simulate_vpp_commands` instead.
+
+    `planned_grid_imported_kwh` (#786) is the plan's per-period import, which
+    with the verdicts decides whether an IDLE hold is released; omit either and
+    IDLE holds, as before."""
     if len(intents) != len(actions_kw):
         raise ValueError(
             f"plan is inconsistent: {len(intents)} intents vs "
             f"{len(actions_kw)} actions"
         )
+
+    for name, series in (
+        ("discharge verdicts", intra_period_discharge_allowed),
+        ("planned imports", planned_grid_imported_kwh),
+    ):
+        if series is not None and len(series) != len(actions_kw):
+            raise ValueError(
+                f"plan is inconsistent: {len(series)} {name} for "
+                f"{len(actions_kw)} actions"
+            )
 
     controller = _vpp_controller(intents, settings)
     budgets = _tracking_budgets(
@@ -450,6 +474,13 @@ def simulate_vpp(
             actions_kw[t],
             at_reserve_floor=soe <= settings.min_soe_kwh,
             tracking_budget_kwh=budgets[t],
+            discharge_authorized=(
+                intra_period_discharge_allowed is not None
+                and planned_grid_imported_kwh is not None
+                and idle_hold_releasable(
+                    intra_period_discharge_allowed[t], planned_grid_imported_kwh[t]
+                )
+            ),
         ),
         len(actions_kw),
         solar_production,

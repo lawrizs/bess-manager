@@ -6,12 +6,14 @@ code paths without needing a live Home Assistant instance.
 """
 
 import logging
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 import requests
 
-from core.bess.exceptions import SystemConfigurationError
+from core.bess.exceptions import CalendarWindowError, SystemConfigurationError
 from core.bess.ha_api_controller import (
     HomeAssistantAPIController,
     solcast_detailed_hourly_to_quarterly,
@@ -1494,6 +1496,192 @@ class TestConsumptionOverlayBlocksStateGating:
         ):
             with pytest.raises(ConsumptionOverlayError, match="no 'blocks'"):
                 overlay_ctrl.get_consumption_overlay_blocks()
+
+
+class TestPeakShavingMonthPeak:
+    """The optional month-peak entity behind the dynamic peak-shaving cap (#96).
+
+    Not configured is a supported setup (the fixed cap keeps working). Once
+    configured, anything but a usable kW/W reading must fail loudly: a silent
+    fallback would plan against the wrong peak and could set a new one.
+    """
+
+    ENTITY = "sensor.electricity_meter_maximale_vraag_huidige_maand"
+
+    @staticmethod
+    def _ctrl(sensors: dict[str, str]) -> HomeAssistantAPIController:
+        c = HomeAssistantAPIController(
+            ha_url="http://ha.local:8123",
+            token="test-token",
+            settings_store=_settings_store(sensors),
+            service_domain="growatt_server",
+        )
+        c.max_attempts = 1
+        c.retry_base_delay = 0
+        c.failure_tracker = RuntimeFailureTracker()
+        return c
+
+    @pytest.fixture
+    def peak_ctrl(self) -> HomeAssistantAPIController:
+        return self._ctrl({"peak_shaving_month_peak": self.ENTITY})
+
+    def test_not_configured_returns_none(self) -> None:
+        assert self._ctrl({}).get_peak_shaving_month_peak_kw() is None
+
+    def test_reads_a_kw_value(self, peak_ctrl: HomeAssistantAPIController) -> None:
+        with patch.object(
+            peak_ctrl,
+            "_api_request",
+            return_value={
+                "state": "1.396",
+                "attributes": {"unit_of_measurement": "kW"},
+            },
+        ):
+            assert peak_ctrl.get_peak_shaving_month_peak_kw() == pytest.approx(1.396)
+
+    def test_converts_a_w_value_to_kw(
+        self, peak_ctrl: HomeAssistantAPIController
+    ) -> None:
+        with patch.object(
+            peak_ctrl,
+            "_api_request",
+            return_value={
+                "state": "4828",
+                "attributes": {"unit_of_measurement": "W"},
+            },
+        ):
+            assert peak_ctrl.get_peak_shaving_month_peak_kw() == pytest.approx(4.828)
+
+    @pytest.mark.parametrize("state", ["unavailable", "unknown", "not-a-number"])
+    def test_unusable_state_raises(
+        self, peak_ctrl: HomeAssistantAPIController, state: str
+    ) -> None:
+        from core.bess.exceptions import PeakShavingSensorError
+
+        with patch.object(
+            peak_ctrl,
+            "_api_request",
+            return_value={"state": state, "attributes": {"unit_of_measurement": "kW"}},
+        ):
+            with pytest.raises(PeakShavingSensorError, match=self.ENTITY):
+                peak_ctrl.get_peak_shaving_month_peak_kw()
+
+    @pytest.mark.parametrize("attributes", [{"unit_of_measurement": "A"}, {}])
+    def test_wrong_or_missing_unit_raises(
+        self, peak_ctrl: HomeAssistantAPIController, attributes: dict
+    ) -> None:
+        from core.bess.exceptions import PeakShavingSensorError
+
+        with patch.object(
+            peak_ctrl,
+            "_api_request",
+            return_value={"state": "4.8", "attributes": attributes},
+        ):
+            with pytest.raises(PeakShavingSensorError, match="unit"):
+                peak_ctrl.get_peak_shaving_month_peak_kw()
+
+    def test_negative_reading_raises(
+        self, peak_ctrl: HomeAssistantAPIController
+    ) -> None:
+        from core.bess.exceptions import PeakShavingSensorError
+
+        with patch.object(
+            peak_ctrl,
+            "_api_request",
+            return_value={"state": "-1", "attributes": {"unit_of_measurement": "kW"}},
+        ):
+            with pytest.raises(PeakShavingSensorError, match="negative"):
+                peak_ctrl.get_peak_shaving_month_peak_kw()
+
+
+class TestGetCalendarWindows:
+    """An HA calendar entity read through HA's calendar REST API."""
+
+    START = datetime(2026, 9, 13, 0, 0, tzinfo=ZoneInfo("Europe/London"))
+    END = datetime(2026, 9, 15, 0, 0, tzinfo=ZoneInfo("Europe/London"))
+    CALENDAR = "calendar.octopus_energy_a_982b3d40_octoplus_power_up"
+
+    @pytest.fixture
+    def calendar_ctrl(self) -> HomeAssistantAPIController:
+        c = HomeAssistantAPIController(
+            ha_url="http://ha.local:8123",
+            token="test-token",
+            settings_store=_settings_store({}),
+            service_domain="growatt_server",
+        )
+        c.max_attempts = 1
+        c.retry_base_delay = 0
+        return c
+
+    def test_verified_payload_is_returned_as_windows(
+        self, calendar_ctrl: HomeAssistantAPIController
+    ) -> None:
+        payload = [
+            {
+                "start": {"dateTime": "2026-09-13T11:00:00+01:00"},
+                "end": {"dateTime": "2026-09-13T12:00:00+01:00"},
+                "summary": "Octopus Energy Power Up",
+                "description": None,
+                "location": None,
+                "uid": 6134,
+                "recurrence_id": None,
+                "rrule": None,
+            }
+        ]
+        with patch.object(calendar_ctrl, "_api_request", return_value=payload) as mock:
+            windows = calendar_ctrl.get_calendar_windows(
+                self.CALENDAR, self.START, self.END
+            )
+
+        assert [(w.start, w.end) for w in windows] == [
+            (
+                datetime(2026, 9, 13, 10, 0, tzinfo=UTC),
+                datetime(2026, 9, 13, 11, 0, tzinfo=UTC),
+            )
+        ]
+        args, kwargs = mock.call_args
+        assert args[1] == (
+            "/api/calendars/calendar.octopus_energy_a_982b3d40_octoplus_power_up"
+        )
+        assert kwargs["params"] == {
+            "start": "2026-09-13T00:00:00+01:00",
+            "end": "2026-09-15T00:00:00+01:00",
+        }
+
+    def test_all_day_event_raises(
+        self, calendar_ctrl: HomeAssistantAPIController
+    ) -> None:
+        payload = [{"start": {"date": "2026-09-13"}, "end": {"date": "2026-09-14"}}]
+        with patch.object(calendar_ctrl, "_api_request", return_value=payload):
+            with pytest.raises(CalendarWindowError):
+                calendar_ctrl.get_calendar_windows(self.CALENDAR, self.START, self.END)
+
+    def test_missing_datetime_raises(
+        self, calendar_ctrl: HomeAssistantAPIController
+    ) -> None:
+        payload = [{"start": {}, "end": {"dateTime": "2026-09-13T12:00:00+01:00"}}]
+        with patch.object(calendar_ctrl, "_api_request", return_value=payload):
+            with pytest.raises(CalendarWindowError):
+                calendar_ctrl.get_calendar_windows(self.CALENDAR, self.START, self.END)
+
+    def test_disabled_or_renamed_calendar_404_raises(
+        self, calendar_ctrl: HomeAssistantAPIController
+    ) -> None:
+        response = MagicMock(status_code=404)
+        not_found = _session_method_mock(
+            "get",
+            side_effect=requests.HTTPError("404 Not Found", response=response),
+        )
+        with patch.object(calendar_ctrl.session, "get", not_found):
+            with pytest.raises(CalendarWindowError, match="octoplus_power_up"):
+                calendar_ctrl.get_calendar_windows(self.CALENDAR, self.START, self.END)
+
+    def test_empty_response_raises(
+        self, calendar_ctrl: HomeAssistantAPIController
+    ) -> None:
+        with patch.object(calendar_ctrl, "_api_request", return_value=None):
+            with pytest.raises(CalendarWindowError):
+                calendar_ctrl.get_calendar_windows(self.CALENDAR, self.START, self.END)
 
 
 class TestGetDeviceMaps:

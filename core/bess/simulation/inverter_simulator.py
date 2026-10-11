@@ -21,6 +21,7 @@ from core.bess.execution_model import (
 from core.bess.inverter_controller import InverterController
 from core.bess.models import PeriodData  # noqa: F401  (type clarity)
 from core.bess.settings import BatterySettings
+from core.bess.strategic_intent import discharge_ceiling_lifts
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,7 @@ def derive_control_command(
     battery_action_kw: float,
     settings: BatterySettings,
     intra_period_discharge_allowed: bool | None = None,
+    planned_grid_imported_kwh: float | None = None,
 ) -> ControlCommand:
     """Map a plan period (intent + planned battery power) to the applied command,
     reusing the production controller mappings so the simulator executes exactly
@@ -51,6 +53,11 @@ def derive_control_command(
     ``BatterySystemManager._apply_period_schedule`` for the two solar intents,
     not for all three.
 
+    ``planned_grid_imported_kwh`` is the plan's own deficit for the period
+    (``EnergyData.grid_imported``). IDLE lifts only when it is a fall-through
+    (``strategic_intent.discharge_ceiling_lifts``, #811), so it is required
+    whenever the gate is exercised for an IDLE period.
+
     ``None`` means "this caller is not exercising the gate" and leaves it
     closed -- distinct from ``False``, which is the DP deciding against opening
     it. Keeping the opt-out its own value is what stops the parameter from
@@ -58,7 +65,11 @@ def derive_control_command(
     ``shadow_price``."""
     battery_mode = InverterController.INTENT_TO_MODE.get(strategic_intent, "load_first")
     grid_charge, discharge_rate_pct, charge_rate_pct = _map_rates(
-        strategic_intent, battery_action_kw, settings, intra_period_discharge_allowed
+        strategic_intent,
+        battery_action_kw,
+        settings,
+        intra_period_discharge_allowed,
+        planned_grid_imported_kwh,
     )
     return ControlCommand(
         battery_mode=battery_mode,
@@ -91,6 +102,7 @@ def _map_rates(
     action_kw: float,
     settings: BatterySettings,
     intra_period_discharge_allowed: bool | None = None,
+    planned_grid_imported_kwh: float | None = None,
 ) -> tuple[bool, int, int]:
     """Mirror of InverterController._map_intent_to_rates without needing a live
     controller instance. Returns (grid_charge, discharge_rate_pct, charge_rate_pct)."""
@@ -109,7 +121,17 @@ def _map_rates(
             charge_rate_pct = 100
         return True, 0, charge_rate_pct
     if intent == "IDLE":
-        return False, 0, 100
+        if intra_period_discharge_allowed is None:
+            return False, 0, 100
+        if planned_grid_imported_kwh is None:
+            raise ValueError(
+                "IDLE with the discharge gate exercised needs "
+                "planned_grid_imported_kwh (#811)"
+            )
+        lifts = discharge_ceiling_lifts(
+            "IDLE", intra_period_discharge_allowed, planned_grid_imported_kwh
+        )
+        return False, _gated_discharge_rate(0, lifts), 100
     if intent == "SOLAR_STORAGE":
         rate = _gated_discharge_rate(0, intra_period_discharge_allowed)
         return False, rate, 100
@@ -259,13 +281,22 @@ def simulate(
     dt: float,
     currency: str = "SEK",
     export_cap_kwh: float | None = None,
+    import_cap_kwh: list[float | None] | None = None,
 ) -> SimulationResult:
     """Execute the command sequence period-by-period, carrying SoC forward, using
     the optimizer's own _state_transition + _build_period_data for accounting
-    parity. Returns realized PeriodData and total realized cost."""
+    parity. Returns realized PeriodData and total realized cost.
+
+    `import_cap_kwh` is the per-period grid-import cap the plan was made under
+    (fuse #429, peak shaving #96). A grid charge is throttled to the headroom
+    it leaves, exactly as in the DP's transition (#804); without it the
+    simulator would charge at the full rate and a throttled plan could never
+    show R == P."""
+    ac_cap_kwh = _effective_ac_cap_kwh(settings, dt)
     soe = initial_soe
     period_data = []
     for t, cmd in enumerate(commands):
+        period_cap = import_cap_kwh[t] if import_cap_kwh is not None else None
         power = mode_to_power(
             cmd,
             solar_production[t],
@@ -289,6 +320,8 @@ def simulate(
                 dt,
                 solar_production=solar_production[t],
                 home_consumption=home_consumption[t],
+                ac_cap_kwh=ac_cap_kwh,
+                import_cap_kwh=period_cap,
             )
         flows = _period_flows(
             power=power,
@@ -299,6 +332,7 @@ def simulate(
             battery_settings=settings,
             dt=dt,
             export_cap_kwh=export_cap_kwh,
+            import_cap_kwh=period_cap,
         )
         pd = _build_period_data(
             flows=flows,

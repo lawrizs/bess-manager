@@ -95,12 +95,30 @@ class PWLEndSoeOutOfRangeError(ValueError):
     """
 
 
+class PeakShavingSensorError(BESSException):
+    """The configured month-peak entity could not be read as a kW value.
+
+    Raised rather than falling back to the fixed cap: planning against the
+    wrong peak can set a new monthly peak that is billed for a year.
+    """
+
+
 class ConsumptionOverlayError(BESSException):
     """The Planned Consumption Changes entity could not be read as blocks.
 
     Raised rather than skipping the offending block: a user who declared an
     EV session and got half of it applied is worse off than one told their
     template is wrong.
+    """
+
+
+class CalendarWindowError(BESSException):
+    """A configured Home Assistant calendar could not be read as time windows.
+
+    Raised for an unreachable calendar entity (disabled or renamed) and for
+    events that are not bounded, timezone-aware spans. A user who configured
+    the Octoplus calendar is better served by a visible error than by a free
+    hour the plan silently ignored.
     """
 
 

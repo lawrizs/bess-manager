@@ -100,7 +100,9 @@ def start() -> None
 - An optional peak-shaving window (`BatterySystemManager.peak_shaving`) — a
   user-configured per-period grid-import cap, active only during a
   configured time window/weekdays, combined with the fuse cap above via
-  `min()`. See the same section's "Peak-shaving window extension" (#96).
+  `min()`. With an optional month-peak sensor (`peak_shaving_month_peak`) the
+  cap follows the month's highest import so far, between a free `floor_kw` and
+  `max_import_kw`. See the same section's "Peak-shaving window extension" (#96).
 
 **Outputs**:
 
@@ -432,7 +434,7 @@ That domain is configuration, not a platform constant. `SettingsStore.get_servic
 
 This is what lets an integration that exposes the same services under its own domain name work as a *configuration* of an existing platform instead of requiring a new one — see PR #412 (Huawei EMMA via `huawei_emma_management`, where the EMMA dials out over TLS because a third party owns the Modbus socket). It carries no compatibility guarantee: the payload format is still the platform's (`HH:MM-HH:MM/<days>/<+|->` for Huawei), and an integration claiming the domain must implement those services with the same signatures.
 
-`SolaxModbusGrowattController` subclasses `GrowattMinController` — the scheduling algorithm (9 TOU slots, differential updates, corruption recovery) is identical. Only the hardware I/O differs: `growatt_server` uses a single service call per slot, while `solax_modbus` uses 4 entity writes (`select.select_option`) plus a button press per slot.
+`SolaxModbusGrowattController` subclasses `GrowattMinController`, but does not reuse its 9-slot schedule: in TOU mode it manages a single all-day TOU segment (slot 1, `SOLAX_GROWATT_MIN_TOU_SLOTS`) and only changes that slot's mode each period; in VPP mode it issues per-period power commands and touches no TOU slot. Hardware I/O also differs: `growatt_server` uses a single service call per slot, while `solax_modbus` uses 4 entity writes (`select.select_option`) plus a button press for the slot.
 
 #### Signed power sensors
 

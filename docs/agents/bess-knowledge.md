@@ -357,6 +357,18 @@ cost and SoE are unchanged to 0.000000000000** — the commands moving with the
 energy fixed is the evidence, not a regression. Above the floor, nothing
 changes.
 
+**Exception — fall-through IDLE** (issue #786): below `FLOW_NOISE_FLOOR_KWH`
+no residual cover can be planned, so a tiny deficit lands in IDLE although the
+optimizer never weighed holding against covering. VPP-mode IDLE is released
+(same command as the floor case) when `strategic_intent.idle_hold_releasable`
+holds: the DP's verdict `intra_period_discharge_allowed` is open **and** the
+plan's own `grid_imported` is within the noise floor. The second condition is
+load-bearing: the verdict is a marginal value at the planned SoE, so releasing
+a deliberate IDLE with a large planned deficit lets the battery cover all of
+it (corpus: +3.6 SEK worse, +4.5 on one fixture, versus 0.00 for the narrow
+rule). Flow-neutral when reality matches the plan; the benefit is under
+forecast error.
+
 ### BATTERY_EXPORT vs SOLAR_EXPORT (why the split exists)
 
 Both export to grid, but they are different situations and need different
@@ -494,6 +506,15 @@ discharge_rate = max(
 Raising, never lowering, the plan-scaled ceiling: gate closed → plan-scaled cap
 and the deficit is imported; gate open → ceiling raised and the deficit is
 covered from the battery.
+
+**IDLE gets the lift only as a fall-through (#811).** A near-balanced slot
+(every flow within `FLOW_NOISE_FLOOR_KWH`) classifies IDLE, and IDLE used to be
+written at rate 0, so solar coming in low or load coming in high was imported.
+`strategic_intent.discharge_ceiling_lifts` is the one declaration of which
+intents lift; for IDLE it requires `idle_hold_releasable` (open verdict **and**
+planned grid import within the noise floor). A deliberate IDLE with a larger
+planned deficit stays at 0% — releasing every open-verdict IDLE measured +3.6
+SEK worse over the corpus (#810). Not yet measured on real TOU hardware.
 
 This settles a change that flipped twice (#384/#385 shipped it, #393 reverted
 it, #520 re-landed it). **Do not re-revert on #393's reasoning**, which was:
@@ -742,15 +763,41 @@ horizon-wide scalar; `BatterySystemManager.peak_shaving` (a `PeakShavingSettings
 block: `enabled`, `start_time`/`end_time`, `days`, `max_import_kw`) adds a
 *per-period* grid-import cap, active only during a user-configured window
 (e.g. a capacity-tariff peak window), combined with the fuse cap via `min()`
-(`_combine_import_caps`, `dp_battery_algorithm.py`) — whichever is tighter
-applies. This is a generic peak-fighting control, deliberately not a modeled
+(`period_import_caps_kwh`, `dp_battery_algorithm.py`, which the inverter
+simulator also executes under) — whichever is tighter applies. This is a generic peak-fighting control, deliberately not a modeled
 capacity/demand tariff (that design, "Option A", was parked — see #96's
 thread): it reuses the exact "constrain, don't raise" mechanism above
 (grid-charging throttled, discharge forced to cover load) rather than adding
 a new tariff cost term to the reward. `peak_shaving_import_cap_per_period`
 (`settings.py`) builds the per-period array from each period's local
 timestamp; `BatterySystemManager._get_peak_shaving_import_cap_limits` wires
-it into `optimize_battery_schedule`.
+it into `optimize_battery_schedule`. `all_day` drops the time-of-day window
+(only `days` selects periods); `start_time == end_time` is unchanged and still
+an empty window.
+
+*Dynamic cap (month-peak entity).* Under a tariff billed on the month's
+highest import (the Flemish capacity tariff: the 12-month average of monthly
+15-minute peaks, with a free floor of 2.5 kW), the DP sees any import below
+the fixed cap as free, so it will grid-charge at full power for a cent-sized
+spread and set a new peak that is billed for a year (#96: 0.20 EUR gained
+against about 10 EUR of tariff). When the optional `peak_shaving_month_peak`
+sensor is mapped, the cap per period becomes
+`min(max_import_kw, max(floor_kw, month_peak_kw))`: importing at or below the
+peak the month already has (or the tariff's free `floor_kw`) costs nothing, and
+`max_import_kw` stays the hard ceiling. It is still a constraint, not a cost
+term, and still only ever tightens. `_read_month_peak` reads the entity and
+attaches the current month; periods in a later month get `floor_kw` because the
+peak resets on the 1st. The sensor is read in kW or W; anything else, or an
+unavailable/negative reading, raises `PeakShavingSensorError`, which is recorded
+as the `PEAK_SHAVING_SENSOR` runtime failure and blocks optimization — never a
+silent fallback to the fixed cap, since planning against the wrong peak is what
+sets a new one. No entity configured keeps the fixed cap exactly. A cap that
+forecast load alone exceeds is unavoidable (same "constrain, never raise" rule);
+the next run reads the raised peak and the cap ratchets up. The cap shapes the
+*plan*: unforecast spikes (an EV starting) are not controlled by it. The
+inverter simulator does not apply the import cap to grid charging (it calls the
+state transition without it), so plan-faithfulness for a throttled grid charge
+cannot be shown with `run_scenario_realized`; the discharge side can.
 
 ### Export curtailment and the charge-early tie-break (#269)
 
@@ -1025,6 +1072,13 @@ it as `predictedResidualLoad` / `plannedManagedLoad` / `predictedTotalLoad`;
 a period with no split (overlay-free install, missing placeholder) falls back
 to residual == total == `homeConsumption`, planned == 0. This is reporting
 only — the optimizer still sees the single composed array, unchanged.
+
+The Planned Schedule (Inverter page, `/api/inverter/schedule`) shows the same
+fact per period group (issue #813): each group carries `planned_load_kwh`, the
+sum of `consumption_breakdown.planned` over its periods, rendered as a chip
+beside the intent badge. It is display-only — planned load never splits a
+group or changes any control value, so a block inside a longer Load Support
+group tags that group rather than carving it up.
 
 
 ### Managed Loads (issue #706)
