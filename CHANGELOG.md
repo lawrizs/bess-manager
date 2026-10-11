@@ -4,6 +4,31 @@ All notable changes to BESS Battery Manager will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [11.9.0-ls] - 2026-10-11
+
+Syncs the fork with upstream `johanzander/bess-manager` `main` through 2026-10-10 ([#27](https://github.com/lawrizs/bess-manager/pull/27)). Everything below is upstream's work since the previous sync, except the last entry under Fixed, which is the fork's own.
+
+### Added
+
+- **Planned Schedule shows planned managed load** — quarters carrying a Planned Consumption Changes block (e.g. an EV session) now show a "+3.00 kWh planned load" chip on the Inverter page. ([#813](https://github.com/johanzander/bess-manager/issues/813))
+- **Peak-shaving can follow the month's peak, and run all day** — optionally map your meter's "highest import this month" entity under Sensors → Peak Shaving Month Peak and the import cap follows the month's highest import so far, importing freely up to the peak already set (or the tariff's free peak level, whichever is higher) but never above Max grid import — the Flemish capacity tariff. Turn off "Only during a time window" to apply the cap around the clock. Both off by default; the window-based cap from 11.1.0-ls is unchanged. ([#96](https://github.com/johanzander/bess-manager/issues/96))
+- **Octopus free power windows are planned as free** — in Electricity Pricing settings, point BESS at the Octopus Energy integration's Octoplus power-up calendar (disabled by default in Home Assistant) and booked Weekend Happy Hours and Power Up sessions are priced at your "price during free windows" (default 0p) instead of the unchanged Agile rate. BESS then fills the battery in the window rather than paying earlier, and stops discharging to cover load that costs nothing; plan, dashboard and savings all use the free price. Bookings made during the day reach the plan within 15 minutes, and saving pricing settings now rebuilds the plan immediately. ([#762](https://github.com/johanzander/bess-manager/pull/762))
+- **Octopus Power Down sessions can export a short pulse** — opt-in under Electricity Pricing (Octopus). During each joined Power Down session BESS exports at least your chosen power for your chosen duration (default 1 kW for 15 minutes) at the start of the session and plans no grid import for the rest of it, so the meter reads net export; a missed slot rolls over to the next. Each session's planned vs realized import/export and its Octopoints are recorded in the daily history and debug bundle. Off by default: whether exporting helps a session score is not yet established. ([#770](https://github.com/johanzander/bess-manager/pull/770))
+
+### Changed
+
+- **Saving pricing settings now rebuilds the plan immediately** — a change under Settings → Pricing (or to the energy provider) refreshes prices and reruns the optimizer for the current quarter in the background, the same as pressing "Re-optimize now", instead of waiting for the next scheduled run. ([#762](https://github.com/johanzander/bess-manager/pull/762))
+- **Fewer Growatt cloud writes for the load-following discharge rate** — the discharge rate is recomputed every 15-min period and wobbles a few points (11% → 13% → 12%); previously every change was re-sent, and each write is exposed to the intermittent `GrowattV1ApiError` cloud rejections. Sub-threshold changes (< 5 percentage points) are now skipped, while the 0%/100% endpoints and the first departure from a stopped battery are always written exactly, so stops and small discharges are never missed. Extends the #402/#741 write-reduction work.
+
+### Fixed
+
+- **Growatt VPP: no more needless grid import in near-idle periods** — when the plan only fell through to idle, the battery now covers load that arrives unexpectedly. ([#786](https://github.com/johanzander/bess-manager/issues/786))
+- **Growatt TOU/cloud: no more needless grid import in near-idle periods** — a near-balanced period now lets the battery cover unexpected load, like the other intents. ([#811](https://github.com/johanzander/bess-manager/issues/811))
+- **Growatt GEN4 (solax_modbus) no longer maps unused TOU slots 2–9** — new setups only bind slot 1, ending the 404 error noise in debug exports. ([#794](https://github.com/johanzander/bess-manager/issues/794))
+- **An unavailable battery SOC sensor now fails with a clear error instead of a raw `TypeError`** — the log names the period and the sensor. ([#792](https://github.com/johanzander/bess-manager/issues/792))
+- **Settings: switching inverter Control Mode (TOU/VPP), Device ID or Service Domain on the Integrations tab now actually saves** — the Integrations tab's own Save button previously dropped these fields silently (stayed disabled, or appeared to save but reverted on reload). ([#787](https://github.com/johanzander/bess-manager/issues/787))
+- **The optimizer's backward pass now applies the Grid Export Limit to the solar-export bypass the same way the plan replay does** — the replay and the windowed pass already withheld the bypass where the limit squeezes a period's export to nothing; the grid pass did not, so under a limit it valued an export the plan could never choose. Only affects installs with a Grid Export Limit, and only in that corner; plans are otherwise unchanged. ([#27](https://github.com/lawrizs/bess-manager/pull/27))
+
 ## [11.8.1-ls] - 2026-09-26
 
 ### Fixed
@@ -17,16 +42,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **SolaX: idle periods now hold the battery instead of quietly spending it** — when the schedule plans to do nothing with the battery, BESS used to hand the period back to the inverter's own self-use logic, which covers the house from the battery even though the plan never counted on that energy being spent. Those periods now use the inverter's "no discharge" mode: the house is covered from solar and grid, while surplus solar still charges the battery exactly as before. Once the battery reaches your configured minimum, BESS hands control back as it always did — there is nothing left to protect, and letting go lets the inverter settle. Requires a recent `solax_modbus`; older versions don't offer the mode and the write will be logged as a failure. Native SolaX inverters only — Growatt is unaffected. ([#22](https://github.com/lawrizs/bess-manager/pull/22))
 
 ## [11.7.0-ls] - 2026-09-22
-
-### Fixed
-
-- **Growatt VPP: no more needless grid import in near-idle periods** — when the plan only fell through to idle, the battery now covers load that arrives unexpectedly. ([#786](https://github.com/johanzander/bess-manager/issues/786))
-- **Growatt TOU/cloud: no more needless grid import in near-idle periods** — a near-balanced period now lets the battery cover unexpected load, like the other intents. ([#811](https://github.com/johanzander/bess-manager/issues/811))
-- **Growatt GEN4 (solax_modbus) no longer maps unused TOU slots 2–9** — new setups only bind slot 1, ending the 404 error noise in debug exports. ([#794](https://github.com/johanzander/bess-manager/issues/794))
-
-### Changed
-
-- **Fewer Growatt cloud writes for the load-following discharge rate** — the discharge rate is recomputed every 15-min period and wobbles a few points (11% → 13% → 12%); previously every change was re-sent, and each write is exposed to the intermittent `GrowattV1ApiError` cloud rejections. Sub-threshold changes (< 5 percentage points) are now skipped, while the 0%/100% endpoints and the first departure from a stopped battery are always written exactly, so stops and small discharges are never missed. Extends the #402/#741 write-reduction work.
 
 ### Added
 
@@ -85,10 +100,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **Time-of-use grid fee** — for operators that bill distribution per kWh at a rate that changes through the day (e.g. ESO in Lithuania), rather than at one flat rate. Switch it on under Settings → Pricing and enter a final, VAT-inclusive rate for night, morning, day and evening; each period's buy price picks up the rate for the time it actually falls in, so the optimizer sees the resulting spread on top of the spot spread. The fee is added on top of Additional Costs (keep any genuinely flat component there), applies to import only, and is off by default, leaving existing installs unchanged.
 - **Peak-shaving: cap grid import during a configured window** — set a time window, weekdays and a max import power, and BESS suppresses grid-charging and discharges to cover load during that window, independent of spot price. Useful for capacity/demand tariffs. ([#96](https://github.com/johanzander/bess-manager/issues/96))
 
-- **Planned Schedule shows planned managed load** — quarters carrying a Planned Consumption Changes block (e.g. an EV session) now show a "+3.00 kWh planned load" chip on the Inverter page. ([#813](https://github.com/johanzander/bess-manager/issues/813))
-- **Peak-shaving: cap grid import during a configured window** — set a time window, weekdays and a max import power, and BESS suppresses grid-charging and discharges to cover load during that window, independent of spot price. Useful for capacity/demand tariffs. Optionally map your meter's month-peak entity so the cap follows the month's highest import so far (Flemish capacity tariff); turn off "Only during a time window" to apply the cap around the clock. ([#96](https://github.com/johanzander/bess-manager/issues/96))
-- **Octopus free power windows are planned as free** — in Electricity Pricing settings, point BESS at the Octopus Energy integration's Octoplus power-up calendar (disabled by default in Home Assistant) and booked Weekend Happy Hours and Power Up sessions are priced at your "price during free windows" (default 0p) instead of the unchanged Agile rate. BESS then fills the battery in the window rather than paying earlier, and stops discharging to cover load that costs nothing; plan, dashboard and savings all use the free price. Bookings made during the day reach the plan within 15 minutes, and saving pricing settings now rebuilds the plan immediately. ([#762](https://github.com/johanzander/bess-manager/pull/762))
-- **Octopus Power Down sessions can export a short pulse** — opt-in under Electricity Pricing (Octopus). During each joined Power Down session BESS exports at least your chosen power for your chosen duration (default 1 kW for 15 minutes) at the start of the session and plans no grid import for the rest of it, so the meter reads net export; a missed slot rolls over to the next. Each session's planned vs realized import/export and its Octopoints are recorded in the daily history and debug bundle. Off by default: whether exporting helps a session score is not yet established. ([#770](https://github.com/johanzander/bess-manager/pull/770))
 ### Removed
 
 - **Removed the unused `min_profit` price setting** — it was never read by the optimizer and only ever appeared as dead noise in settings/debug bundles. ([#773](https://github.com/johanzander/bess-manager/issues/773))
@@ -107,8 +118,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Fixed
 
-- **An unavailable battery SOC sensor now fails with a clear error instead of a raw `TypeError`** — the log names the period and the sensor. ([#792](https://github.com/johanzander/bess-manager/issues/792))
-- **Settings: switching inverter Control Mode (TOU/VPP), Device ID or Service Domain on the Integrations tab now actually saves** — the Integrations tab's own Save button previously dropped these fields silently (stayed disabled, or appeared to save but reverted on reload). ([#787](https://github.com/johanzander/bess-manager/issues/787))
 - **The battery's stored-energy cost basis no longer overstates the grid's share during deliberate grid charging** — during `GRID_CHARGING` periods the accounting now attributes concurrent solar to the battery first (matching the battery-first inverter topology), instead of assuming the home-first order that only holds for solar-surplus charging. ([#536](https://github.com/johanzander/bess-manager/issues/536))
 
 ## [11.0.0] - 2026-09-13
