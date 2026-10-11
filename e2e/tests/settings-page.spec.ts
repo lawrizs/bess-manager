@@ -135,6 +135,8 @@ test.describe('Settings Page', () => {
     await startInput.fill('06:00');
     const capInput = page.locator('label').filter({ hasText: /Max grid import during window/i }).locator('input');
     await capInput.fill('2.5');
+    const floorInput = page.locator('label').filter({ hasText: /Free peak level/i }).locator('input');
+    await floorInput.fill('1.5');
 
     const saveButton = page.getByRole('button', { name: 'Save', exact: true });
     await expect(saveButton).toBeEnabled();
@@ -150,8 +152,42 @@ test.describe('Settings Page', () => {
     await expect(reloadedStart).toHaveValue('06:00');
     const reloadedCap = page.locator('label').filter({ hasText: /Max grid import during window/i }).locator('input');
     await expect(reloadedCap).toHaveValue('2.5');
+    const reloadedFloor = page.locator('label').filter({ hasText: /Free peak level/i }).locator('input');
+    await expect(reloadedFloor).toHaveValue('1.5');
 
     // Restore disabled so this test leaves the fixture as it found it.
+    await page.getByRole('switch', { name: 'Enable peak shaving' }).click();
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(page.getByText(/saved|success/i).first()).toBeVisible({ timeout: 5_000 });
+  });
+
+  test('peak shaving all-day switch hides the window times and persists (#96)', async ({ page }) => {
+    await page.goto('/settings');
+    await expect(page.getByText('Loading settings')).not.toBeVisible({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'Home', exact: true }).click();
+
+    await page.getByRole('switch', { name: 'Enable peak shaving' }).click();
+    const windowSwitch = page.getByRole('switch', { name: 'Only during a time window' });
+    await expect(windowSwitch).toHaveAttribute('aria-checked', 'true');
+    await expect(page.getByText(/Window start/i)).toBeVisible();
+
+    // Off = around the clock: the time fields go away, the day picker stays.
+    await windowSwitch.click();
+    await expect(page.getByText(/Window start/i)).not.toBeVisible();
+    await expect(page.getByText('Active days')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(page.getByText(/saved|success/i).first()).toBeVisible({ timeout: 5_000 });
+
+    await page.reload();
+    await expect(page.getByText('Loading settings')).not.toBeVisible({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'Home', exact: true }).click();
+
+    await expect(page.getByRole('switch', { name: 'Only during a time window' })).toHaveAttribute('aria-checked', 'false');
+    await expect(page.getByText(/Window start/i)).not.toBeVisible();
+
+    // Restore the fixture: window back on, peak shaving off.
+    await page.getByRole('switch', { name: 'Only during a time window' }).click();
     await page.getByRole('switch', { name: 'Enable peak shaving' }).click();
     await page.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(page.getByText(/saved|success/i).first()).toBeVisible({ timeout: 5_000 });
@@ -169,15 +205,73 @@ test.describe('Settings Page', () => {
   });
 });
 
+test.describe('Control mode persists when saved from the Integrations tab (#787)', () => {
+  // The Control Mode (TOU/VPP) toggle renders on the Integrations tab
+  // alongside the platform picker and that platform's sensor list — it needs
+  // to stay there, since switching platform changes which sensors apply.
+  // Until #787 was fixed, the Integrations tab's own Save button did not
+  // persist inverterForm at all (isDirty.sensors never saw it, and
+  // saveSensors()'s payload never included an `inverter` key), so this is
+  // the reporter's exact repro: no tab switch, just the Integrations tab's
+  // Save button.
+
+  test('switching to VPP enables Save on the Integrations tab and actually reaches the backend', async ({ page }) => {
+    await page.goto('/settings');
+    await expect(page.getByText('Loading settings')).not.toBeVisible({ timeout: 15_000 });
+
+    // Default CI fixture is growatt_server_min (cloud) — switch to the SolaX
+    // Modbus / Growatt MIN(GEN4) platform, the only one with a Control Mode
+    // toggle. (The CI fixture has no sensors mapped for this platform, so a
+    // full page reload afterwards would land on the setup wizard rather than
+    // Settings — the assertions below check persistence via the settings API
+    // directly instead, which is what actually regressed and is unaffected by
+    // that unrelated completeness gate.)
+    await page.getByRole('tab', { name: 'SolaX Modbus' }).click();
+    await page.getByRole('button', { name: 'Growatt MIN/GEN4' }).click();
+
+    const saveButton = page.getByRole('button', { name: 'Save', exact: true });
+
+    await page.getByRole('button', { name: 'VPP Remote Power' }).click();
+
+    // Symptom 1: Save must not stay disabled just because the only change
+    // was to inverterForm.
+    await expect(saveButton).toBeEnabled();
+    await saveButton.click();
+    await expect(page.getByText(/saved|success/i).first()).toBeVisible({ timeout: 5_000 });
+
+    // Symptom 2: the save must have actually reached the backend, not just
+    // updated React state and shown a success toast.
+    const afterSave = await (await page.request.get('/api/settings')).json();
+    expect(afterSave.inverter.platform).toBe('solax_modbus_growatt_min');
+    expect(afterSave.inverter.controlMode).toBe('vpp');
+
+    // Restore TOU and the original platform so later tests see an unmodified
+    // install — no reload needed, so the wizard-redirect gate above never
+    // applies. (Switching platform alone does not reset controlMode — only
+    // deviceId/serviceDomain — so it must be flipped back explicitly too.)
+    await page.getByRole('tab', { name: 'SolaX Modbus' }).click();
+    await page.getByRole('button', { name: 'TOU Schedule (default)' }).click();
+    await page.getByRole('tab', { name: 'Growatt Cloud' }).click();
+    await expect(saveButton).toBeEnabled();
+    await saveButton.click();
+    await expect(page.getByText(/saved|success/i).first()).toBeVisible({ timeout: 5_000 });
+
+    const restored = await (await page.request.get('/api/settings')).json();
+    expect(restored.inverter.platform).toBe('growatt_server_min');
+    expect(restored.inverter.controlMode).toBe('tou');
+  });
+});
+
 test.describe('Inverter service domain override', () => {
   // The vendor service domain (huawei_solar / growatt_server) used to be
   // hardcoded, which forced a compatible integration under a different domain
   // name to become a whole new BESS platform (PR #412). It is now an override
   // on the inverter section, editable per install.
   //
-  // The inverter form renders on the Integrations tab but is saved by the
-  // Battery tab's Save button (isDirty.battery covers inverterForm) — the
-  // spec follows that existing flow deliberately.
+  // The inverter form renders on the Integrations tab, and (since #787) is
+  // saved correctly by either the Integrations tab's own Save button or the
+  // Battery tab's — this spec exercises the Battery-tab path, which was
+  // always correct, as a second independent route to the same data.
 
   const serviceDomainInput = (page: import('@playwright/test').Page) =>
     page.locator('label').filter({ hasText: /Service domain/i }).locator('input');

@@ -12,11 +12,21 @@ from typing import TYPE_CHECKING, ClassVar
 from .dp_schedule import DPSchedule
 from .execution_model import INTENT_TO_MODE, command_index
 from .settings import BatterySettings
+from .strategic_intent import idle_hold_releasable
 
 if TYPE_CHECKING:
     from .ha_api_controller import HomeAssistantAPIController
 
 logger = logging.getLogger(__name__)
+
+# Minimum change (percentage points) in the load-following discharge rate that
+# justifies re-writing the register to the Growatt cloud. The rate is recomputed
+# every 15-min period and wobbles a few points (e.g. 11% -> 13%); re-sending each
+# tiny change is surplus cloud write churn that contributes to the intermittent
+# GrowattV1ApiError rejections (#741). Sub-threshold changes are skipped, but the
+# 0/100 endpoints and the first departure from a stopped battery are always
+# written (see _discharge_rate_write_needed).
+DISCHARGE_RATE_WRITE_MATERIALITY_PCT = 5
 
 
 class InverterController(ABC):
@@ -584,6 +594,7 @@ class InverterController(ABC):
         strategic_intent: str = "",
         at_reserve_floor: bool = False,
         charge_rate: int = 100,
+        discharge_authorized: bool = False,
     ) -> tuple[bool, str]:
         """Write period control settings to hardware.
 
@@ -611,6 +622,12 @@ class InverterController(ABC):
                 at the floor. Forced-power platforms use it to stop holding a
                 battery that has nothing left to hold, releasing the inverter
                 so its BMS can sleep -- see #592.
+            discharge_authorized: The DP's verdict that the stored energy is
+                worth no more than the grid price this period
+                (`DecisionData.intra_period_discharge_allowed`, #526).
+                Register-based platforms ignore this. Forced-power platforms
+                use it to release the IDLE hold when the plan itself would
+                rather cover load than import -- see #786.
             charge_rate: The plan's action-derived GRID_CHARGING rate
                 (0-100%, #754), computed by the caller (BatterySystemManager,
                 which knows the exact period and action) rather than
@@ -698,6 +715,7 @@ class InverterController(ABC):
                 block_passive_charging,
                 self._planned_at_reserve_floor(period),
                 charge_rate,
+                self._planned_discharge_authorized(period),
             ),
         }
 
@@ -744,6 +762,30 @@ class InverterController(ABC):
         entering_soe = soe[period - 1] if period > 0 else soe[0]
         return entering_soe <= self.battery_settings.min_soe_kwh
 
+    def _planned_discharge_authorized(self, period: int) -> bool:
+        """The plan's discharge verdict for this period (#786), for display.
+
+        The display counterpart to the rule BatterySystemManager applies on the
+        write path: both call `strategic_intent.idle_hold_releasable`,
+        the one declaration of it. Without it
+        `_mode_display_fields` would show the battery_first hold for an IDLE
+        period production releases.
+
+        False when the plan carries no decision for the period -- absence of an
+        economic basis is not permission (#526), and the hold is the
+        unchanged-behaviour answer.
+        """
+        if self.current_schedule is None:
+            return False
+        period_data = self.current_schedule.period_data
+        if period >= len(period_data):
+            return False
+        planned = period_data[period]
+        return idle_hold_releasable(
+            planned.decision.intra_period_discharge_allowed,
+            planned.energy.grid_imported,
+        )
+
     def _mode_display_fields(
         self,
         intent: str,
@@ -752,6 +794,7 @@ class InverterController(ABC):
         block_passive_charging: bool,
         at_reserve_floor: bool = False,
         charge_rate: int = 100,
+        discharge_authorized: bool = False,
     ) -> dict:
         """Single source of truth for what mode-related fields a period
         gets, branching on CONTROL_MODEL. Never fabricates a label the
@@ -791,6 +834,7 @@ class InverterController(ABC):
                 intent,
                 at_reserve_floor,
                 charge_rate,
+                discharge_authorized,
             )
             return {
                 "vpp_power_pct": power_pct,
@@ -845,6 +889,7 @@ class InverterController(ABC):
         actions: list[float] | None = None,
         soc_values: list[float | None] | None = None,
         curtailed: list[bool] | None = None,
+        planned_loads: list[float] | None = None,
     ) -> list[dict]:
         """Get period groups with full control parameters for display/API.
 
@@ -864,6 +909,10 @@ class InverterController(ABC):
                        from PeriodData.decision.curtailed. Defaults to all
                        False when omitted -- callers without curtailment
                        data get the pre-#501 grouping behavior unchanged.
+            planned_loads: Optional per-period net planned managed load in kWh
+                           (PeriodData.consumption_breakdown.planned, #813).
+                           Summed into each group's planned_load_kwh for
+                           display only -- it never affects grouping.
 
         Returns:
             List of period groups with all control parameters and time strings
@@ -919,6 +968,11 @@ class InverterController(ABC):
                     "discharge_rate": discharge_rate,
                     "action_kwh": action_kwh,
                     "curtailed": period_curtailed,
+                    "planned_load_kwh": (
+                        planned_loads[period]
+                        if planned_loads is not None and period < len(planned_loads)
+                        else 0.0
+                    ),
                 }
             )
 
@@ -939,6 +993,7 @@ class InverterController(ABC):
                 current_group["end_period"] = ps["period"]
                 current_group["count"] += 1
                 current_group["total_action_kwh"] += ps["action_kwh"]
+                current_group["planned_load_kwh"] += ps["planned_load_kwh"]
             else:
                 if current_group is not None:
                     groups.append(current_group)
@@ -953,6 +1008,7 @@ class InverterController(ABC):
                     "curtailed": ps["curtailed"],
                     "count": 1,
                     "total_action_kwh": ps["action_kwh"],
+                    "planned_load_kwh": ps["planned_load_kwh"],
                 }
 
         if current_group is not None:
@@ -986,6 +1042,7 @@ class InverterController(ABC):
                     "total_action_kwh": group["total_action_kwh"],
                     "soc_end_pct": soc_end,
                     "curtailed": group["curtailed"],
+                    "planned_load_kwh": group["planned_load_kwh"],
                 }
             )
         return result
@@ -1119,10 +1176,7 @@ class InverterController(ABC):
                 logger.error("FAILED: set_grid_charge(%s): %s", grid_charge, e)
                 errors.append(str(e))
 
-        if (
-            not self.dedupe_register_writes
-            or discharge_rate != self._last_written_discharge_rate
-        ):
+        if self._discharge_rate_write_needed(discharge_rate):
             try:
                 controller.set_discharging_power_rate(discharge_rate)
                 self._last_written_discharge_rate = discharge_rate
@@ -1159,6 +1213,31 @@ class InverterController(ABC):
             return
         controller.set_charging_power_rate(charge_rate)
         self._last_written_charge_rate = charge_rate
+
+    def _discharge_rate_write_needed(self, discharge_rate: int) -> bool:
+        """Whether the discharge-power-rate register needs a (re)write.
+
+        Beyond the #402 identical-value dedup, skip a re-write when the change
+        from the last written value is economically trivial (< the materiality
+        threshold), because the load-following rate wobbles a few points every
+        period and each write is exposed to Growatt cloud rejections (#741).
+        The endpoints are always honoured exactly: 0 (stop — a residual few %
+        would keep draining) and 100 (full rate — a cap a few % low loses peak
+        capacity); and the first departure from a stopped battery is always
+        written, so a small discharge still starts. The threshold is measured
+        against the last *written* value, not the last desired one, so many
+        small steps still trigger a write once they drift past it.
+        """
+        if not self.dedupe_register_writes:
+            return True
+        last = self._last_written_discharge_rate
+        if last is None:
+            return True
+        if discharge_rate == last:
+            return False
+        if discharge_rate == 0 or discharge_rate == 100 or last == 0:
+            return True
+        return abs(discharge_rate - last) >= DISCHARGE_RATE_WRITE_MATERIALITY_PCT
 
     @abstractmethod
     def get_all_tou_segments(self) -> list[dict]:

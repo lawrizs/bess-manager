@@ -29,6 +29,49 @@ _POWER_THRESHOLD_KW = POWER_CLASSIFICATION_THRESHOLD_KW
 FLOW_NOISE_FLOOR_KWH = 0.01
 
 
+def idle_hold_releasable(verdict_open: bool, planned_grid_imported_kwh: float) -> bool:
+    """May a forced-power (VPP) platform release an IDLE hold this period? (#786)
+
+    The one declaration of the rule, read by the write path, the display and the
+    simulator alike. True when both hold:
+
+    * the DP's verdict is open -- the stored energy is worth no more than the
+      grid price (`decision.intra_period_discharge_allowed`, #526), and
+    * the plan's own deficit (`energy.grid_imported`) is within
+      `FLOW_NOISE_FLOOR_KWH`.
+
+    The second condition is what makes IDLE a *fall-through* rather than a
+    choice: `action_selector._residual_cover_p` refuses a cover below the floor,
+    so a sub-floor deficit lands in IDLE although the optimizer never weighed
+    holding against covering. Releasing then costs nothing when forecast equals
+    plan and saves the import when load runs high. A deficit above the floor
+    that the plan left to the grid is a deliberate IDLE -- the verdict is a
+    marginal value at the planned SoE, and releasing would let the battery cover
+    the whole deficit, draining energy the plan reserved for later (measured on
+    the scenario corpus: +3.6 SEK worse in total, +4.5 on one fixture).
+    """
+    return verdict_open and planned_grid_imported_kwh <= FLOW_NOISE_FLOOR_KWH
+
+
+def discharge_ceiling_lifts(
+    intent: str, verdict_open: bool, planned_grid_imported_kwh: float
+) -> bool:
+    """Does the DP's open verdict raise this slot's discharge ceiling on a
+    load-following platform (Growatt MIN TOU/cloud)? (#811)
+
+    The one declaration of which intents get the lift, read by the write path
+    and the simulator. SOLAR_EXPORT / SOLAR_STORAGE / LOAD_SUPPORT lift on an
+    open verdict (#526). IDLE lifts only when it is a fall-through
+    (`idle_hold_releasable`): a near-balanced slot lands in IDLE, and with a
+    ceiling of 0 it cannot cover solar coming in low or load coming in high.
+    """
+    if intent in ("SOLAR_EXPORT", "SOLAR_STORAGE", "LOAD_SUPPORT"):
+        return verdict_open
+    if intent == "IDLE":
+        return idle_hold_releasable(verdict_open, planned_grid_imported_kwh)
+    return False
+
+
 def classify_strategic_intent(power: float, energy_data: EnergyData) -> str:
     """Classify the strategic intent of a battery action based on power and energy flows.
 

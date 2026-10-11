@@ -165,6 +165,7 @@ class SolaxController(InverterController):
         strategic_intent: str = "",
         at_reserve_floor: bool = False,
         charge_rate: int = 100,
+        discharge_authorized: bool = False,
     ) -> tuple[bool, str]:
         """Write period control settings to hardware.
 
@@ -293,6 +294,7 @@ class SolaxController(InverterController):
         strategic_intent: str = "",
         at_reserve_floor: bool = False,
         charge_rate: int = 100,
+        discharge_authorized: bool = False,
     ) -> tuple[int, bool]:
         """Map (grid_charge, discharge_rate) to (power_pct, remote_control_enabled)
         for display, mirroring _write_period_to_hardware()'s branches exactly.
@@ -322,6 +324,11 @@ class SolaxController(InverterController):
         charge_rate (#754) likewise changes what this reports, mirroring how
         _write_period_to_hardware scales its actual watts command to the
         plan's rate instead of always writing max_charge_power_kw.
+
+        discharge_authorized (#786) is accepted but ignored: the Growatt VPP
+        fall-through release has not been ported to this hold, and the write
+        path does not read it either. It is in the signature only so the base
+        class can call every vpp_power controller with one signature.
 
         Returns:
             (power_pct, remote_control_enabled) -- power_pct expressed as a
