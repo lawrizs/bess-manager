@@ -25,7 +25,12 @@ Two things are pinned here, matching the two ways the passes can diverge:
 import numpy as np
 import pytest
 
-from core.bess.action_selector import PeriodInputs, _residual_cover_p, select_action
+from core.bess.action_selector import (
+    PeriodInputs,
+    _residual_cover_p,
+    _solar_export_bypass_is_unexecutable,
+    select_action,
+)
 from core.bess.dp_battery_algorithm import (
     _compute_reward,
     _compute_reward_grid,
@@ -41,6 +46,7 @@ from core.bess.pwl_window_dp import (
     _pwl_candidate_values_at,
 )
 from core.bess.settings import BatterySettings
+from core.bess.strategic_intent import FLOW_NOISE_FLOOR_KWH
 from core.bess.tests.helpers import make_battery_settings
 
 DT = 0.25
@@ -280,6 +286,7 @@ def _backward_pass_value(
     sell: float,
     soe: float,
     target: float | None,
+    export_cap_kwh: float | None = None,
 ) -> float:
     """One-period V at `soe` from the named backward pass, with a zero
     continuation row so the value is exactly the best reward it admits."""
@@ -293,6 +300,7 @@ def _backward_pass_value(
             dt=DT,
             solar_production=[solar],
             initial_soe=soe,
+            export_cap_kwh=export_cap_kwh,
             min_grid_export_kwh=None if target is None else [target],
         )
         return float(V[0, round((soe - settings.min_soe_kwh) / SOE_STEP_KWH)])
@@ -317,6 +325,7 @@ def _backward_pass_value(
         DT,
         None,
         None,
+        export_cap_kwh=export_cap_kwh,
         capabilities=DEFAULT_CAPABILITIES,
         min_grid_export_kwh=target,
     )
@@ -331,6 +340,7 @@ def _selector_value(
     sell: float,
     soe: float,
     target: float | None,
+    export_cap_kwh: float | None = None,
 ) -> float:
     """The selector's argmax value under the same zero continuation."""
     result = select_action(
@@ -345,6 +355,7 @@ def _selector_value(
             home_consumption=[home],
             solar_production=[solar],
             dt=DT,
+            export_cap_kwh=export_cap_kwh,
             min_grid_export_kwh=None if target is None else [target],
         ),
         battery_settings=settings,
@@ -410,4 +421,64 @@ def test_backward_passes_apply_the_selectors_minimum_export_mask(
     assert backward == pytest.approx(constrained, abs=1e-9), (
         f"{backward_pass} backward pass valued this state at {backward} while "
         f"the selector's best export-meeting candidate is worth {constrained}"
+    )
+
+
+@pytest.mark.parametrize("backward_pass", ["grid", "pwl"])
+def test_backward_passes_withhold_the_bypass_the_export_cap_makes_unexecutable(
+    backward_pass: str,
+) -> None:
+    """#630's executability gate folds the DSO export cap in, the way
+    `_period_ac_cap_kwh` folds it into every other flow: a surplus the cap
+    squeezes to the noise floor is one the classifier calls IDLE, so the
+    selector withholds the bypass there. Each backward pass must withhold it
+    under the same cap (P1). A pass that still offers the column values an
+    export the replay can never plan, and V ranks the plan by a candidate
+    that does not exist.
+    """
+    settings = make_battery_settings(cycle_cost_per_kwh=0.40)
+    home, solar, buy, sell = 0.1, 1.5, 1.5, 0.9
+    soe = settings.min_soe_kwh
+    export_cap_kwh = FLOW_NOISE_FLOOR_KWH / 2
+
+    assert not _solar_export_bypass_is_unexecutable(solar, home, settings, DT)
+    assert _solar_export_bypass_is_unexecutable(
+        solar, home, settings, DT, export_cap_kwh
+    )
+
+    # Under the cap the bypass clips the surplus for free while IDLE absorbs
+    # it and pays cycle cost, so a pass that wrongly keeps the column reports
+    # the bypass's higher value rather than the selector's.
+    bypass_reward, _basis, _flows = _compute_reward(
+        power=0.0,
+        soe=soe,
+        next_soe=soe,
+        period=0,
+        home_consumption=home,
+        battery_settings=settings,
+        dt=DT,
+        solar_production=solar,
+        buy_price=[buy],
+        sell_price=[sell],
+        cost_basis=0.0,
+        export_cap_kwh=export_cap_kwh,
+    )
+    selector_value = _selector_value(
+        settings, home, solar, buy, sell, soe, None, export_cap_kwh=export_cap_kwh
+    )
+    assert bypass_reward > selector_value, "fixture no longer discriminates"
+
+    assert (
+        _backward_pass_value(
+            backward_pass,
+            settings,
+            home,
+            solar,
+            buy,
+            sell,
+            soe,
+            None,
+            export_cap_kwh=export_cap_kwh,
+        )
+        == selector_value
     )

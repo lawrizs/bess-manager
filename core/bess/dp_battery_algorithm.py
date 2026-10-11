@@ -1605,7 +1605,11 @@ def _run_dynamic_programming(
         # lattice approximation, and its executable neighbour (plain IDLE)
         # is already in the action set at every state.
         if not _solar_export_bypass_is_unexecutable(
-            solar_production[t], home_consumption[t], battery_settings, dt
+            solar_production[t],
+            home_consumption[t],
+            battery_settings,
+            dt,
+            export_cap_kwh,
         ):
             zeros_col = np.zeros_like(soe_col)
             reward_bypass, grid_imported_bypass, grid_exported_bypass = (
