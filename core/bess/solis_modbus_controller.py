@@ -95,13 +95,20 @@ class SolisModbusController(InverterController):
         self._discharge_periods: list[dict] = []
 
     def _write_period_to_hardware(
-        self, controller, grid_charge: bool, discharge_rate: int
+        self,
+        controller,
+        grid_charge: bool,
+        discharge_rate: int,
+        block_passive_charging: bool = False,
     ) -> tuple[bool, str]:
         """No-op: Solis deploys the full schedule via sync_to_hardware.
 
         Solis has no per-period entity controls beyond the TOU schedule
         itself (no separate grid_charge switch / discharge rate number) —
         the entire period list is written in ``sync_to_hardware``.
+
+        ``block_passive_charging`` is accepted to match the base signature
+        (``apply_period`` passes it to every platform) and is unused here.
         """
         return True, ""
 
@@ -336,7 +343,7 @@ class SolisModbusController(InverterController):
             return
 
         now = time_utils.now()
-        current_period = now.hour * 4 + now.minute // 15
+        current_period = time_utils.timestamp_to_period_index(now)
 
         lines = [
             "\n╔═══════════════╦══════════════════╦═══════════════╗",
@@ -356,8 +363,8 @@ class SolisModbusController(InverterController):
                 period += 1
             run_end = period
 
-            sh, sm = run_start // 4, (run_start % 4) * 15
-            eh, em = run_end // 4, (run_end % 4) * 15
+            sh, sm = self._period_to_time(run_start)
+            eh, em = self._period_to_time(run_end)
             em += 14
 
             time_range = f"{sh:02d}:{sm:02d}-{eh:02d}:{em:02d}"
