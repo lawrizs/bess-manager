@@ -5,8 +5,8 @@ API endpoints for battery and electricity settings, dashboard data, and decision
 
 import dataclasses
 import threading
+from datetime import UTC, datetime, timedelta
 from datetime import date as date_cls
-from datetime import datetime, timedelta
 from typing import Any
 
 from api_conversion import (
@@ -37,7 +37,9 @@ from fastapi import APIRouter, HTTPException, Query
 from loguru import logger
 
 from core.bess import time_utils
+from core.bess.dp_battery_algorithm import has_value_cell_below
 from core.bess.exceptions import SystemConfigurationError
+from core.bess.free_import_overlay import free_import_by_period_start
 from core.bess.health_check import (
     group_components_by_device,
     run_system_health_checks,
@@ -45,9 +47,10 @@ from core.bess.health_check import (
 from core.bess.influxdb_helper import is_influxdb_configured
 from core.bess.models import PeriodData
 from core.bess.savings_aggregator import DEFAULT_COUNTS, build_buckets
-from core.bess.settings import canonicalize_consumption_strategy
+from core.bess.settings import BatterySettings, canonicalize_consumption_strategy
 from core.bess.settings_store import (
     ENERGY_FLOW_LINE_STYLES,
+    VALID_GRID_POWER_POLARITIES,
     VALID_PLATFORMS,
     flatten_sensors,
 )
@@ -306,7 +309,7 @@ def _replan_in_background(bess_controller: Any) -> None:
             bess_controller.system.refresh_prices()
             now = time_utils.now()
             bess_controller.system.update_battery_schedule(
-                current_period=now.hour * 4 + now.minute // 15
+                current_period=time_utils.timestamp_to_period_index(now)
             )
             logger.info("Schedule rebuilt after pricing settings change")
         except Exception as e:
@@ -434,6 +437,15 @@ async def patch_settings(updates: dict):
                         status_code=422,
                         detail=(
                             f"Invalid Home Assistant integration domain: {domain!r}"
+                        ),
+                    )
+                polarity = snake_data.get("grid_power_polarity")
+                if polarity and polarity not in VALID_GRID_POWER_POLARITIES:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            f"grid_power_polarity must be one of "
+                            f"{VALID_GRID_POWER_POLARITIES}, got {polarity!r}"
                         ),
                     )
 
@@ -696,6 +708,10 @@ def _aggregate_quarterly_to_hourly(
             else last_period.observedIntent
         )
 
+        quarter_shadow_prices = [
+            p.shadowPrice.value for p in quarter_periods if p.shadowPrice is not None
+        ]
+
         # Sum energy values across the 4 quarters
         hourly_period = APIDashboardHourlyData(
             period=hour,
@@ -870,11 +886,38 @@ def _aggregate_quarterly_to_hourly(
             curtailed=hour_curtailed,
             directSolar=sum(p.directSolar for p in quarter_periods),
             isFreeImport=any(p.isFreeImport for p in quarter_periods),
+            shadowPrice=(
+                create_formatted_value(
+                    sum(quarter_shadow_prices) / len(quarter_shadow_prices),
+                    "price",
+                    currency,
+                )
+                if quarter_shadow_prices
+                else None
+            ),
         )
 
         hourly_periods.append(hourly_period)
 
     return hourly_periods
+
+
+def _plan_shadow_price(
+    period_data: PeriodData, battery_settings: BatterySettings
+) -> float | None:
+    """The plan's shadow price for a period, or None where the plan holds none.
+
+    DecisionData.shadow_price defaults to 0.0 where the DP never computed one,
+    which a consumer would read as "stored energy is free". Report None for
+    those periods instead: an elapsed period carries measured data, not a plan
+    decision, and a period starting at the reserve floor has no stored kWh
+    below it to price (the same rule the DP applies, via has_value_cell_below).
+    """
+    if period_data.data_source != "predicted":
+        return None
+    if not has_value_cell_below(period_data.energy.battery_soe_start, battery_settings):
+        return None
+    return period_data.decision.shadow_price
 
 
 @router.get("/api/dashboard/available-dates")
@@ -970,24 +1013,26 @@ async def get_dashboard_data(
         # Get system components
         controller = bess_controller.ha_controller
         settings = bess_controller.system.get_settings()
-        battery_capacity = settings["battery"].total_capacity
+        battery_settings = settings["battery"]
+        battery_capacity = battery_settings.total_capacity
         currency = bess_controller.system.home_settings.currency
 
-        # Free-import window lookup, keyed by "YYYY-MM-DD HH:MM" timestamp —
-        # only available for today/tomorrow via the price manager's cache
+        # Free-import window lookup, keyed by period start instant (UTC): the
+        # wall-clock label is ambiguous on the repeated DST fall-back hour.
+        # Only available for today/tomorrow via the price manager's cache
         # (get_price_data), never for a historical day.
-        free_import_by_timestamp: dict[str, bool] = {}
+        free_import_by_instant: dict[datetime, bool] = {}
         if not is_historical:
-            for entry in bess_controller.system.price_manager.get_cached_today_prices():
-                free_import_by_timestamp[entry["timestamp"]] = entry.get(
-                    "isFreeImport", False
-                )
+            free_import_by_instant = free_import_by_period_start(
+                bess_controller.system.price_manager.get_cached_today_prices(),
+                time_utils.today(),
+            )
 
         def _is_free_import(period_data: PeriodData) -> bool:
             ts = period_data.timestamp
             if ts is None:
                 return False
-            return free_import_by_timestamp.get(ts.strftime("%Y-%m-%d %H:%M"), False)
+            return free_import_by_instant.get(ts.astimezone(UTC), False)
 
         # Convert periods to API format (works for both hourly and quarterly)
         hourly_dataclass_instances = [
@@ -996,6 +1041,11 @@ async def get_dashboard_data(
                 battery_capacity,
                 currency,
                 is_free_import=_is_free_import(period_data),
+                shadow_price=(
+                    None
+                    if is_historical
+                    else _plan_shadow_price(period_data, battery_settings)
+                ),
             )
             for period_data in daily_view.periods
         ]
@@ -1040,27 +1090,23 @@ async def get_dashboard_data(
                     if period_data is not None:
                         tomorrow_periods.append(period_data)
                 if tomorrow_periods:
-                    tomorrow_free_import_by_timestamp: dict[str, bool] = {}
-                    for (
-                        entry
-                    ) in (
-                        bess_controller.system.price_manager.get_cached_tomorrow_prices()
-                    ):
-                        tomorrow_free_import_by_timestamp[entry["timestamp"]] = (
-                            entry.get("isFreeImport", False)
-                        )
+                    tomorrow_free_import_by_instant = free_import_by_period_start(
+                        bess_controller.system.price_manager.get_cached_tomorrow_prices(),
+                        time_utils.today() + timedelta(days=1),
+                    )
                     tomorrow_data = [
                         APIDashboardHourlyData.from_internal(
                             p,
                             battery_capacity,
                             currency,
                             is_free_import=(
-                                tomorrow_free_import_by_timestamp.get(
-                                    p.timestamp.strftime("%Y-%m-%d %H:%M"), False
+                                tomorrow_free_import_by_instant.get(
+                                    p.timestamp.astimezone(UTC), False
                                 )
                                 if p.timestamp is not None
                                 else False
                             ),
+                            shadow_price=_plan_shadow_price(p, battery_settings),
                         )
                         for p in tomorrow_periods
                     ]
@@ -1239,7 +1285,7 @@ async def get_inverter_status():
         try:
             now = time_utils.now()
             schedule_manager = bess_controller.system._inverter_controller
-            current_period = now.hour * 4 + now.minute // 15
+            current_period = time_utils.timestamp_to_period_index(now)
             period_settings = schedule_manager.get_period_settings(current_period)
             if "batt_mode" in period_settings:
                 current_mode_fields = {"battery_mode": period_settings["batt_mode"]}
@@ -2273,7 +2319,7 @@ async def get_savings_aggregate(
             not in bess_controller.system.daily_view_store.list_available_dates()
         ):
             now = time_utils.now()
-            current_period = now.hour * 4 + now.minute // 15
+            current_period = time_utils.timestamp_to_period_index(now)
             today_view = bess_controller.system.daily_view_builder.build_daily_view(
                 current_period, bess_controller.system.export_curtailment_active
             )
@@ -2361,7 +2407,7 @@ async def get_prediction_comparison(
         # Get current state
 
         now = time_utils.now()
-        current_period = now.hour * 4 + now.minute // 15
+        current_period = time_utils.timestamp_to_period_index(now)
 
         # Build current daily view
         current_daily_view = bess_controller.system.daily_view_builder.build_daily_view(
@@ -3591,7 +3637,7 @@ async def setup_complete(payload: APISetupCompletePayload):
                 )
             try:
                 now = time_utils.now()
-                current_period = now.hour * 4 + now.minute // 15
+                current_period = time_utils.timestamp_to_period_index(now)
                 bess_controller.system.update_battery_schedule(
                     current_period=current_period
                 )

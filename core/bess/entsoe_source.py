@@ -24,7 +24,7 @@ expanded to the system-wide 96 quarterly (15-minute) period model.
 """
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import ClassVar
 
 from . import time_utils
@@ -169,8 +169,71 @@ class EntsoeSource(PriceSource):
             if entry_dt.date() == target_date:
                 filtered.append((entry_dt, float(price)))
 
+        filtered = self._drop_stale_offset_duplicates(filtered)
         filtered.sort(key=lambda item: item[0])
         return [price for _, price in filtered]
+
+    @staticmethod
+    def _drop_stale_offset_duplicates(
+        entries: list[tuple[datetime, float]],
+    ) -> list[tuple[datetime, float]]:
+        """Drop entries that duplicate a wall-clock slot with an offset it never has.
+
+        After a clock change the integration can leave the pre-auction stub
+        (``00:00+02:00``) beside the real day (``00:00+01:00``..). The stub claims
+        the same wall-clock time as a real entry but with an offset the local zone
+        does not have at that time, so converting it to local time moves it to
+        another wall time. Only such an entry that collides with a consistent one
+        is dropped; a lone entry, and the genuinely repeated hour of a fall-back
+        day (both offsets valid), are kept.
+        """
+
+        def wall(entry_dt: datetime) -> datetime:
+            return entry_dt.replace(tzinfo=None)
+
+        def consistent(entry_dt: datetime) -> bool:
+            if entry_dt.tzinfo is None:
+                return True
+            return wall(entry_dt.astimezone(time_utils.TIMEZONE)) == wall(entry_dt)
+
+        by_wall: dict[datetime, list[tuple[datetime, float]]] = {}
+        for item in entries:
+            by_wall.setdefault(wall(item[0]), []).append(item)
+
+        kept: list[tuple[datetime, float]] = []
+        for group in by_wall.values():
+            valid = [item for item in group if consistent(item[0])]
+            kept.extend(valid if valid else group)
+        return kept
+
+    @staticmethod
+    def _restore_repeated_fall_back_hour(
+        prices: list[float], target_date: date
+    ) -> list[float]:
+        """Restore the repeated wall-clock hour of a 25-hour (fall-back) day.
+
+        The ENTSO-e integration keys hourly prices by wall-clock time, so the
+        hour that occurs twice on the fall-back day arrives once: 24 entries,
+        indexed by wall-clock hour 0..23. The second occurrence has no price of
+        its own in that data, so both occurrences take the one price that arrived
+        (which of the two the integration kept is not known).
+        """
+        start = datetime.combine(target_date, time(0, 0), tzinfo=time_utils.TIMEZONE)
+        start_utc = start.astimezone(UTC)
+        wall_hours = [
+            (start_utc + timedelta(hours=h)).astimezone(time_utils.TIMEZONE).hour
+            for h in range(25)
+        ]
+        repeated = next(h for h in range(1, 25) if wall_hours[h] == wall_hours[h - 1])
+        logger.warning(
+            "ENTSO-e returned 24 hourly prices for %s, a 25-hour day: the repeated "
+            "%02d:00 hour is missing upstream, using the single price received for "
+            "that hour for both occurrences (%.4f EUR/kWh)",
+            target_date,
+            wall_hours[repeated],
+            prices[wall_hours[repeated]],
+        )
+        return [prices[wall_hour] for wall_hour in wall_hours]
 
     def _expand_to_quarterly(
         self, prices: list[float], target_date: date
@@ -182,17 +245,23 @@ class EntsoeSource(PriceSource):
         are both handled, including 23h/25h DST days.
 
         Raises:
-            PriceDataUnavailableError: If the raw count does not divide evenly into
-                the expected quarterly count.
+            PriceDataUnavailableError: If the raw count is neither the hourly nor
+                the quarterly count for the day (an incomplete day, such as the
+                single-entry ``prices_tomorrow`` stub before the auction).
         """
         quarterly_count = time_utils.get_period_count(target_date)
 
-        if len(prices) == 0 or quarterly_count % len(prices) != 0:
+        if len(prices) == 24 and quarterly_count == 25 * 4:
+            prices = self._restore_repeated_fall_back_hour(prices, target_date)
+
+        hourly_count = quarterly_count // 4
+        if len(prices) not in (hourly_count, quarterly_count):
             raise PriceDataUnavailableError(
                 date=target_date,
                 message=(
-                    f"Unexpected ENTSO-e price count {len(prices)} for {target_date}: "
-                    f"does not divide evenly into {quarterly_count} quarterly periods"
+                    f"Incomplete ENTSO-e day for {target_date}: got {len(prices)} "
+                    f"prices, expected {hourly_count} hourly or {quarterly_count} "
+                    f"quarterly"
                 ),
             )
 

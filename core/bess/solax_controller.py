@@ -469,7 +469,7 @@ class SolaxController(InverterController):
             return
 
         now = time_utils.now()
-        current_period = now.hour * 4 + now.minute // 15
+        current_period = time_utils.timestamp_to_period_index(now)
 
         if current_period < len(self.strategic_intents):
             intent = self.strategic_intents[current_period]
@@ -493,7 +493,7 @@ class SolaxController(InverterController):
             return
 
         now = time_utils.now()
-        current_period = now.hour * 4 + now.minute // 15
+        current_period = time_utils.timestamp_to_period_index(now)
 
         lines = [
             "\n╔═══════════════╦══════════════════╦════════════╗",
@@ -513,8 +513,8 @@ class SolaxController(InverterController):
                 period += 1
             run_end = period
 
-            sh, sm = run_start // 4, (run_start % 4) * 15
-            eh, em = run_end // 4, (run_end % 4) * 15
+            sh, sm = self._period_to_time(run_start)
+            eh, em = self._period_to_time(run_end)
             em += 14
 
             time_range = f"{sh:02d}:{sm:02d}-{eh:02d}:{em:02d}"
