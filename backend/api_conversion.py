@@ -100,6 +100,8 @@ PRICE_REQUIRED_FIELDS: frozenset[str] = frozenset(
         "grid_fee_morning",
         "grid_fee_day",
         "grid_fee_evening",
+        "grid_tariff_hourly",
+        "grid_tariff_summer_hourly",
     }
 )
 

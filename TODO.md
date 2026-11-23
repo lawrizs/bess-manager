@@ -1,6 +1,76 @@
 # Energy Management System Improvements - Prioritized Implementation Plan
 
 
+### **Settings saves can still persist part of a rejected request**
+
+**Impact**: Low | **Effort**: Small | **Dependencies**: `backend/api.py`
+
+**Description**: Found reviewing #917. A multi-section PATCH saves earlier sections before a later one is rejected with 422, and the wizard's `apply_discovered_config` writes before its validation runs. The `electricity_price` section is checked only by `validate_grid_tariff`, not the full `PriceSettings.update()`, so an unknown key can still be saved and fail startup. Validate every section before the first write.
+
+
+### **Settings save errors don't say which field was refused**
+
+**Impact**: Low | **Effort**: Small | **Dependencies**: `frontend/src/pages/SettingsPage.tsx`
+
+**Description**: Found reviewing #917. A 422 shows axios's "Request failed with status code 422" instead of the backend's `detail` (e.g. "safety_margin must be positive"). Show `response.data.detail` in the toast.
+
+
+### **Health banner: a component that fails every other check never raises one**
+
+**Impact**: Low | **Effort**: Small | **Dependencies**: `core/bess/battery_system_manager.py`
+
+**Description**: Since #875 a banner needs the problem to persist for 3 minutes, and a passing check resets that. A required sensor that alternates fail/pass every 5 minutes shows on the Health page but never on the dashboard. A windowed count (N failures in the last M checks) would cover it.
+
+
+### **A failed period write that landed can still mislead the discharge inhibit**
+
+**Impact**: Low | **Effort**: Small | **Dependencies**: `core/bess/battery_system_manager.py`
+
+**Description**: #875 made the inhibit retry its own failed writes, but a failed period write leaves `_last_applied_discharge_rate` at its old value. If that write landed and the inhibit then activates with a target equal to the old value, the inhibit write is skipped. Needs an "unknown" state that does not trigger a write every minute during an outage.
+
+
+### **Period retry that never runs leaves only the service-call banner**
+
+**Impact**: Low | **Effort**: Small | **Dependencies**: `core/bess/battery_system_manager.py`
+
+**Description**: Since #875 the period_apply banner waits for retries to run out. A retry job that misfires, or a restart between attempts, never reports, so only the HA service-call banner for the failed write remains.
+
+
+### **Solax status logs report load_first after a failed write**
+
+**Impact**: Low | **Effort**: Small | **Dependencies**: `core/bess/solax_modbus_growatt_controller.py`
+
+**Description**: After #875 a failed TOU/VPP write resets the remembered mode to unknown, and the display/log helpers render unknown as `load_first` / "remote control disabled". A debug bundle from such a failure then shows a mode that was never confirmed.
+
+
+### **`has_critical_sensor_failures()` has no production caller**
+
+**Impact**: Low | **Effort**: Small | **Dependencies**: `core/bess/battery_system_manager.py`, `backend/tests/test_dashboard_api.py`
+
+**Description**: Since #875 the dashboard banner filters on sustained failures, so this method's only callers are tests and stale mock setup. Remove it, or redefine it on the sustained set.
+
+
+### **Solis: more hold periods compete for the six discharge slots**
+
+**Impact**: Low | **Effort**: Medium | **Dependencies**: `core/bess/solis_modbus_controller.py`
+
+**Description**: Since #884 the plan holds instead of covering part of the load, so a Solis day can need more hold blocks. On the #869 bundle the whole horizon went from 4 to 8, today's part fits easily, but a day with more than six would drop holds to Self Use and drain the battery against the plan.
+
+
+### **Fuse monitor: first grid-charge tick can overshoot for one minute**
+
+**Impact**: Low | **Effort**: Medium | **Dependencies**: `core/bess/power_monitor.py`
+
+**Description**: Since #877 the monitor moves the rate by the measured headroom, so a charge start from a leftover high rate, or a sudden house-load jump, can exceed the fuse limit until the next one-minute tick. Settling also assumes the inverter responds within a tick; that is measured on Growatt cloud only.
+
+
+### **Schedule Overview: elapsed row labels stay the plan while Solar and Grid are measured**
+
+**Impact**: Low | **Effort**: Medium | **Dependencies**: `backend/api.py`, `frontend/src/components/InverterStatusDashboard.tsx`
+
+**Description**: Since #866, an elapsed row's energy is measured but its intent label is still planned, so a slot planned as IDLE that really grid-charged shows no Grid value. Using observed intents would change elapsed rows' grouping, so it needs its own decision.
+
+
 ### **Commanded-value trace duplicated across the four number-like setters**
 
 **Impact**: Low | **Effort**: Low | **Dependencies**: `core/bess/ha_api_controller.py`

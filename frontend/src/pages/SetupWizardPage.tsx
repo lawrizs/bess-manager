@@ -140,6 +140,8 @@ const SetupWizardPage: React.FC = () => {
     gridFeeMorning: 0,
     gridFeeDay: 0,
     gridFeeEvening: 0,
+    gridTariffHourly: [],
+    gridTariffSummerHourly: [],
   });
 
   const handleScan = useCallback(async () => {
@@ -365,6 +367,8 @@ const SetupWizardPage: React.FC = () => {
         gridFeeMorning:        elec.gridFeeMorning                  ?? f.gridFeeMorning,
         gridFeeDay:            elec.gridFeeDay                      ?? f.gridFeeDay,
         gridFeeEvening:        elec.gridFeeEvening                  ?? f.gridFeeEvening,
+        gridTariffHourly:      elec.gridTariffHourly                ?? f.gridTariffHourly,
+        gridTariffSummerHourly: elec.gridTariffSummerHourly         ?? f.gridTariffSummerHourly,
         // Restore saved config entry IDs so manual entries survive a wizard re-run
         nordpoolConfigEntryId: ep.nordpoolOfficial?.configEntryId ?? f.nordpoolConfigEntryId,
         nordpoolEntity:        ep.nordpoolHacs?.entity           ?? f.nordpoolEntity,
@@ -463,6 +467,8 @@ const SetupWizardPage: React.FC = () => {
         gridFeeMorning: pricingForm.gridFeeMorning,
         gridFeeDay: pricingForm.gridFeeDay,
         gridFeeEvening: pricingForm.gridFeeEvening,
+        gridTariffHourly: pricingForm.gridTariffHourly,
+        gridTariffSummerHourly: pricingForm.gridTariffSummerHourly,
         // Nordpool HACS entity
         nordpoolEntity: pricingForm.nordpoolEntity || undefined,
         // Octopus Energy entity IDs

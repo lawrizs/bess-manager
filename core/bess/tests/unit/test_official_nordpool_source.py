@@ -26,7 +26,6 @@ def _source(ha_controller=None, config_entry_id="01K3Y99FD3MDZYVFX2XSWR4888"):
     return OfficialNordpoolSource(
         ha_controller=ha_controller or MagicMock(),
         config_entry_id=config_entry_id,
-        vat_multiplier=1.25,
         area="SE4",
     )
 
@@ -202,7 +201,6 @@ class TestLocalDayAlignment:
         source = OfficialNordpoolSource(
             ha_controller=controller,
             config_entry_id="01K3Y99FD3MDZYVFX2XSWR4888",
-            vat_multiplier=1.21,
             area="LT",
         )
 
@@ -229,7 +227,6 @@ class TestLocalDayAlignment:
         source = OfficialNordpoolSource(
             ha_controller=controller,
             config_entry_id="01K3Y99FD3MDZYVFX2XSWR4888",
-            vat_multiplier=1.25,
             area="SE4",
         )
 
@@ -257,7 +254,6 @@ class TestLocalDayAlignment:
         source = OfficialNordpoolSource(
             ha_controller=controller,
             config_entry_id="01K3Y99FD3MDZYVFX2XSWR4888",
-            vat_multiplier=1.21,
             area="LT",
         )
 
@@ -285,7 +281,6 @@ class TestLocalDayAlignment:
         source = OfficialNordpoolSource(
             ha_controller=controller,
             config_entry_id="01K3Y99FD3MDZYVFX2XSWR4888",
-            vat_multiplier=1.21,
             area="LT",
         )
 
@@ -319,7 +314,6 @@ class TestLocalDayAlignment:
         source = OfficialNordpoolSource(
             ha_controller=controller,
             config_entry_id="01K3Y99FD3MDZYVFX2XSWR4888",
-            vat_multiplier=1.21,
             area="LT",
         )
 
@@ -354,7 +348,6 @@ class TestGridFeePairing:
         source = OfficialNordpoolSource(
             ha_controller=controller,
             config_entry_id="01K3Y99FD3MDZYVFX2XSWR4888",
-            vat_multiplier=1.21,
             area="LT",
         )
         manager = PriceManager(
@@ -412,7 +405,6 @@ class TestRetryWarningSuppression:
         source = OfficialNordpoolSource(
             ha_controller=controller,
             config_entry_id="01K3Y99FD3MDZYVFX2XSWR4888",
-            vat_multiplier=1.21,
             area="LT",
         )
 

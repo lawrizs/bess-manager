@@ -106,6 +106,8 @@ def _valid_options() -> dict:
             "grid_fee_day": 0.10406,
             "grid_fee_evening": 0.14641,
             "use_actual_price": False,
+            "grid_tariff_hourly": [0.45] * 24,
+            "grid_tariff_summer_hourly": [0.23] * 24,
         },
     }
 
@@ -670,7 +672,7 @@ class TestNordpoolServiceContract:
             "service_response": {"SE4": entries}
         }
 
-        source = OfficialNordpoolSource(ha_controller, "test-config-entry-id", 1.25)
+        source = OfficialNordpoolSource(ha_controller, "test-config-entry-id")
 
         # Patch only time_utils.today so the date-range guard accepts our
         # target_date; the delivery-day mapping needs the real TIMEZONE,

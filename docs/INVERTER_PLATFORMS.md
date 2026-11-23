@@ -269,9 +269,11 @@ semantics" below):
   always `+100%`, discarding the fuse-aware import cap's throttled rate,
   issue #429), remote control enabled
 - `BATTERY_EXPORT` (rate>0) → `vpp_power=-rate%`, remote control enabled
-- `LOAD_SUPPORT` (any rate) → `vpp_power=0`, remote control **disabled**,
-  regardless of `discharge_rate` (releases to `load_first` self-use — see
-  "LOAD_SUPPORT semantics" below)
+- `LOAD_SUPPORT` (rate>0) → `vpp_power=0`, remote control **disabled**
+  (releases to `load_first` self-use — see "LOAD_SUPPORT semantics" below)
+- `LOAD_SUPPORT` (rate=0, e.g. discharge inhibit active) → `vpp_power=+1%`,
+  remote control **enabled** (`battery_first` hold, released at the reserve
+  floor like `IDLE` — issue [#881](https://github.com/johanzander/bess-manager/issues/881))
 - `SOLAR_STORAGE` (rate=0, `block_passive_charging=False`) → remote
   control disabled (`load_first`/self-use — battery may absorb solar surplus)
 - `IDLE` (rate=0) → `vpp_power=+1%`, remote control **enabled**
@@ -312,6 +314,13 @@ outright, falling back to the inverter's native `load_first` self-consumption
 — the VPP-mode equivalent of TOU's `load_first` mapping. Reported
 independently by two real-hardware testers (Growatt MIN, control_mode=vpp)
 on issue [#118](https://github.com/johanzander/bess-manager/issues/118).
+
+The release ignores `discharge_rate`, so it also ignored the **discharge
+inhibit**, which works by zeroing that rate: self-use covered the whole load,
+EV included, and drained the battery to its floor (issue
+[#881](https://github.com/johanzander/bess-manager/issues/881)). A zero-rate
+`LOAD_SUPPORT` period now holds with `IDLE`'s `battery_first` command instead
+— the same "no discharge" a zero `load_first` ceiling means on TOU.
 
 **SOLAR_EXPORT semantics (fixed — issue [#355](https://github.com/johanzander/bess-manager/issues/355)):**
 The Growatt VPP protocol
@@ -511,7 +520,7 @@ platform: a `LOAD_SUPPORT` period disables VPP instead, handing the period to
 the inverter's own self-use load-following so it covers the *actual* deficit.
 
 The toggle is not only a write change. The controller's
-`load_support_delivers_exact_cover` follows it, so the optimizer may plan an
+`load_support_delivery` follows it (`unmodelled` → `ceiling`), so the optimizer may plan an
 off-lattice partial load cover (`action_selector._residual_cover_p`) exactly
 when the inverter can deliver one. `discharge_rate_is_load_following` stays
 `False` either way — `BATTERY_EXPORT` still writes a forced watt target
@@ -548,9 +557,34 @@ switch.turn_on/turn_off(entity: solis_charge_enable_N)
 # ...and the same for solis_discharge_{start,end,enable}_N, N = 1..6
 ```
 
-**Per-period control:** none — Solis has no per-period charge/discharge rate
-register exposed by solis_modbus (`supports_charge_rate_control = False`,
-same limitation as SPH).
+**What a discharge slot does** (measured on an S5-EH1P, issue
+[#869](https://github.com/johanzander/bess-manager/issues/869)): an active slot
+is not permission to discharge. It forces the slot's own battery current out
+regardless of load, down to the slot's own cut-off SOC, and at or below that
+cut-off the battery does not discharge at all, leaving the house on the grid.
+With no slot active, Self Use follows the load. The intent mapping follows from
+that:
+
+| Intent | Hardware |
+|--------|----------|
+| `LOAD_SUPPORT` | No slot: Self Use follows the load |
+| `IDLE`, deliberate | Discharge slot with cut-off 100%, so the battery holds |
+| `IDLE` within one SOC point of the floor, or releasable (#786) | No slot |
+| `BATTERY_EXPORT` | Discharge slot, cut-off at the planned end SOC (never below `min_soc`), current from planned power and live battery voltage |
+| `GRID_CHARGING` | Charge slot |
+
+Exports are allocated the six discharge slots before holds. A slot whose limits
+cannot be written stays closed, and `check_health` reports the missing entities.
+
+**Requires Self-use selected in SolisCloud.** A SolisCloud "Timed Plans" schedule
+can hold the battery at 0 W during its Stand-by periods while Home Assistant
+still shows Self-Use, and BESS cannot see that mode.
+
+**Known limitation:** the optimizer can plan a partial cover (battery plus some
+grid import), which Self Use cannot deliver: it covers the whole load until the
+battery is empty. BESS re-plans every 15 minutes, but the battery can run out
+earlier than planned. `supports_charge_rate_control` is still `False`; the
+per-slot discharge current is only used to size exports.
 
 **Verified integration bug (source-cited):** `SolisSensorGroup.__init__`
 (`sensors/solis_base_sensor.py:254`) calls
@@ -637,8 +671,15 @@ places, the same read-compare-write shape Growatt MIN adopted in #551/#552:
   retried write, the corruption flag, the 23:55 next-day preparation) go
   through this check too.
 
-An empty plan still writes: the empty string is how BESS clears periods the
-battery is otherwise left running.
+An empty plan still writes, because periods left on the battery repeat every
+day. `set_tou_periods` rejects an empty string (HTTP 500), so BESS clears the
+list by writing one period effective on no day (`00:00-00:14//+`), and treats
+such a period read back from the battery as no schedule.
+
+A write that fails raises out of `sync_to_hardware` after the remaining writes
+have been attempted. `evaluate_intents` compares against BESS's own model,
+which already holds the new plan, so a swallowed failure would never be
+retried; raising lets BSM's `_hardware_write_pending` resend it next cycle.
 
 Readback is enabled by the sensor being *mapped*, never by attempting the
 read and catching failure. Installs whose integration exposes no such entity
@@ -936,9 +977,16 @@ GEN4 above (`limit_grid_export` / `grid_export_limit`, registers 122/123) —
 | `solis_discharge_start_N` | time | `time_entity_{register}` (43753/43760/43767/43774/43781/43788) | Discharge slot N start |
 | `solis_discharge_end_N` | time | `time_entity_{register}` (43755/43762/43769/43776/43783/43790) | Discharge slot N end |
 | `solis_discharge_enable_N` | switch | `{register}_{bit}` = `43707_6`..`43707_11` | Discharge slot N enable |
+| `solis_discharge_cutoff_soc_N` | number | `solis_modbus_inverter_tou_charge_cutoff_discharge_N` | Discharge slot N cut-off SOC |
+| `solis_discharge_current_N` | number | `solis_modbus_inverter_tou_discharge_v2_battery_current_N` | Discharge slot N battery current |
+| `battery_voltage` | sensor | `solis_modbus_inverter_battery_voltage` | Converts planned export power to slot current |
 
 Only slot 1 of each direction is strictly required; slots 2-6 are optional
-(unused slots are simply left disabled by BESS).
+(unused slots are simply left disabled by BESS). The cut-off and current
+entities must resolve to `number.*`: the integration also publishes a read-only
+`sensor.*` with the same unique_id suffix. Installs set up before #869 need to
+re-run sensor discovery to pick them up; until then BESS opens no hold or export
+slot and reports the missing entities in the health check.
 
 ### Huawei LUNA2000 (Local) — `huawei_solar` integration
 

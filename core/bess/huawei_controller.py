@@ -25,6 +25,7 @@ from typing import ClassVar
 from . import time_utils
 from .dp_schedule import DPSchedule
 from .exceptions import SystemConfigurationError
+from .execution_model import LOAD_SUPPORT_UNMODELLED
 from .inverter_controller import InverterController
 from .settings import BatterySettings
 
@@ -94,6 +95,13 @@ DEFAULT_SERVICE_DOMAIN = "huawei_solar"
 # in the design doc for live-hardware confirmation of this convention.
 ALL_DAYS = "1234567"
 
+# huawei_solar's set_tou_periods cannot write an empty list: its parser turns
+# "" into one empty line and fails the call (services.py,
+# _parse_huawei_luna2000_periods). A period effective on no day never runs, so
+# writing one is how BESS clears the battery's schedule.
+NO_DAYS = ""
+INERT_PERIOD_TEXT = f"00:00-00:14/{NO_DAYS}/+"
+
 
 class HuaweiController(InverterController):
     """Creates Huawei LUNA2000 inverter schedules from strategic intents.
@@ -107,7 +115,7 @@ class HuaweiController(InverterController):
 
     # A discharge period is a time slot, not a rate -- there is no per-period
     # control that could deliver a partial load cover as planned.
-    load_support_delivers_exact_cover: ClassVar[bool] = False
+    load_support_delivery: ClassVar[str] = LOAD_SUPPORT_UNMODELLED
 
     CONTROL_MODEL: ClassVar[str] = "period_list"
 
@@ -274,6 +282,8 @@ class HuaweiController(InverterController):
 
     def _periods_to_text(self) -> str:
         """Join periods into huawei_solar.set_tou_periods text format."""
+        if not self._periods:
+            return INERT_PERIOD_TEXT
         lines = [
             f"{p['start_time']}-{p['end_time']}/{p['days']}/{p['flag']}"
             for p in self._periods
@@ -308,10 +318,13 @@ class HuaweiController(InverterController):
             SystemConfigurationError: If the sensor can't be read — an
                 unreadable entity must not read as "no periods programmed".
         """
-        return [
+        periods = [
             self._period_from_text(line)
             for line in controller.read_huawei_tou_periods()
         ]
+        # A no-days period never runs, so a battery holding only the inert
+        # period BESS writes to clear it holds no schedule.
+        return [p for p in periods if p["days"] != NO_DAYS]
 
     def sync_to_hardware(
         self,
@@ -350,8 +363,10 @@ class HuaweiController(InverterController):
                 non-empty working-mode option list with no supported Time Of
                 Use option (stock ``time_of_use_luna2000`` or EMMA's
                 ``Time Of Use``) — i.e. it's an LG RESU battery, not supported.
+            RuntimeError: If any write failed, after every write was attempted.
         """
         writes = 0
+        failures: list[str] = []
 
         # Read before writing anything. The read raises rather than reporting
         # an empty list, so ordering decides what a failed read leaves behind:
@@ -390,6 +405,7 @@ class HuaweiController(InverterController):
                     writes += 1
                 except Exception as e:
                     logger.error("FAILED: set_huawei_working_mode: %s", e)
+                    failures.append(f"set_huawei_working_mode: {e}")
 
         has_charge_period = any(p["flag"] == "+" for p in self._periods)
         try:
@@ -397,6 +413,7 @@ class HuaweiController(InverterController):
             writes += 1
         except Exception as e:
             logger.error("FAILED: set_grid_charge: %s", e)
+            failures.append(f"set_grid_charge: {e}")
 
         if hardware_periods is not None and hardware_periods == self._periods:
             logger.info(
@@ -404,15 +421,26 @@ class HuaweiController(InverterController):
                 "— no write",
                 len(self._periods),
             )
-            return writes, 0
+        else:
+            periods_text = self._periods_to_text()
+            logger.info("HUAWEI HARDWARE: Writing %d TOU period(s)", len(self._periods))
+            try:
+                controller.write_huawei_tou_periods(periods_text)
+                writes += 1
+            except Exception as e:
+                logger.error("FAILED: write_huawei_tou_periods: %s", e)
+                failures.append(f"write_huawei_tou_periods: {e}")
 
-        periods_text = self._periods_to_text()
-        logger.info("HUAWEI HARDWARE: Writing %d TOU period(s)", len(self._periods))
-        try:
-            controller.write_huawei_tou_periods(periods_text)
-            writes += 1
-        except Exception as e:
-            logger.error("FAILED: write_huawei_tou_periods: %s", e)
+        if failures:
+            # apply_intents has already moved this controller's model to the
+            # new plan, and evaluate_intents compares against that model — a
+            # swallowed failure would read as "schedules match" every cycle
+            # after, leaving the battery on the old periods (#916). Raising
+            # makes battery_system_manager._apply_schedule set
+            # _hardware_write_pending and retry the whole sync next cycle.
+            raise RuntimeError(
+                f"{len(failures)} Huawei write(s) failed: {'; '.join(failures)}"
+            )
 
         return writes, 0
 

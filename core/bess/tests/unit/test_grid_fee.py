@@ -100,20 +100,28 @@ LT_RATES: dict[str, float] = {
 class TestBuyPriceEffect:
     def test_disabled_leaves_the_buy_price_untouched(self) -> None:
         pm = _price_manager(grid_fee_enabled=False, **LT_RATES)
-        assert pm._calculate_buy_price(1.0, _at(MONDAY, 18)) == pytest.approx(1.0)
+        assert pm._calculate_buy_price(1.0, _at(MONDAY, 18), 0.0) == pytest.approx(1.0)
 
     def test_enabled_adds_the_rate_for_the_period_zone(self) -> None:
         pm = _price_manager(grid_fee_enabled=True, **LT_RATES)
 
-        assert pm._calculate_buy_price(1.0, _at(MONDAY, 3)) == pytest.approx(1.06292)
-        assert pm._calculate_buy_price(1.0, _at(MONDAY, 6)) == pytest.approx(1.08349)
-        assert pm._calculate_buy_price(1.0, _at(MONDAY, 10)) == pytest.approx(1.10406)
-        assert pm._calculate_buy_price(1.0, _at(MONDAY, 18)) == pytest.approx(1.14641)
+        assert pm._calculate_buy_price(1.0, _at(MONDAY, 3), 0.0) == pytest.approx(
+            1.06292
+        )
+        assert pm._calculate_buy_price(1.0, _at(MONDAY, 6), 0.0) == pytest.approx(
+            1.08349
+        )
+        assert pm._calculate_buy_price(1.0, _at(MONDAY, 10), 0.0) == pytest.approx(
+            1.10406
+        )
+        assert pm._calculate_buy_price(1.0, _at(MONDAY, 18), 0.0) == pytest.approx(
+            1.14641
+        )
 
     def test_fee_stacks_on_top_of_the_flat_additional_costs(self) -> None:
         """The two are independent components, not alternatives."""
         pm = _price_manager(additional_costs=0.25, grid_fee_enabled=True, **LT_RATES)
-        assert pm._calculate_buy_price(1.0, _at(MONDAY, 18)) == pytest.approx(
+        assert pm._calculate_buy_price(1.0, _at(MONDAY, 18), 0.0) == pytest.approx(
             1.0 + 0.25 + 0.14641
         )
 
@@ -121,8 +129,8 @@ class TestBuyPriceEffect:
         """The whole point: the optimizer must see a spread the spot price alone
         does not carry."""
         pm = _price_manager(grid_fee_enabled=True, **LT_RATES)
-        night = pm._calculate_buy_price(1.0, _at(MONDAY, 2))
-        evening = pm._calculate_buy_price(1.0, _at(MONDAY, 19))
+        night = pm._calculate_buy_price(1.0, _at(MONDAY, 2), 0.0)
+        evening = pm._calculate_buy_price(1.0, _at(MONDAY, 19), 0.0)
         assert evening - night == pytest.approx(0.14641 - 0.06292)
 
     def test_a_full_day_of_prices_varies_by_period(self) -> None:

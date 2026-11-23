@@ -211,12 +211,18 @@ def _effective_import_cap_kwh(
     runtime -- on a fully unloaded 3-phase house it authorizes the battery up
     to its full `max_charge_power_w` (not a single phase's worth), since
     `available_pct` is computed relative to `max_charge_power_w / phase_count`
-    per phase. `HomePowerMonitor` remains the real-time backstop against
-    unbalanced loads (it measures actual per-phase current and throttles
-    battery charging against the single worst-loaded phase, commit 37201cb9,
-    #11); the DP has no per-phase forecast to reproduce that live check, so it
-    caps against the balanced-load assumption instead of the unbalanced
-    worst case.
+    per phase. Where the platform supports it, `HomePowerMonitor` is the
+    real-time backstop against unbalanced loads (it measures actual per-phase
+    current and throttles battery charging against the single worst-loaded
+    phase, commit 37201cb9, #11); the DP has no per-phase forecast to
+    reproduce that live check, so it caps against the balanced-load
+    assumption instead of the unbalanced worst case.
+
+    The backstop exists only when `realtime_fuse_guard_supported` holds
+    (a per-period charge rate to throttle). On Growatt VPP, SPH, SolaX, Huawei
+    and Solis it does not, and this cap -- against *forecast* load -- is the
+    only fuse protection; `safety_margin` is then the user's sole headroom for
+    load the forecast misses (#901).
     """
     if home_settings is None or not home_settings.power_monitoring_enabled:
         return None
@@ -337,6 +343,22 @@ def period_import_caps_kwh(
     if fuse_import_cap_kwh is not None:
         return [fuse_import_cap_kwh] * horizon
     return None
+
+
+def period_export_caps_kwh(
+    home_settings: HomeSettings | None, horizon: int, dt: float
+) -> list[float | None] | None:
+    """Per-period grid-export caps (kWh), or None when fuse protection is off.
+
+    A fuse trips on current in either direction, so the fuse-derived limit
+    that bounds import (#429) bounds export too (#910) -- same derivation,
+    from `_effective_import_cap_kwh`, so the two cannot drift. Only the fuse
+    applies here: peak-shaving and Power Down session caps limit import alone.
+    """
+    fuse_cap_kwh = _effective_import_cap_kwh(home_settings, dt)
+    if fuse_cap_kwh is None:
+        return None
+    return [fuse_cap_kwh] * horizon
 
 
 def _ac_flows(
@@ -1373,6 +1395,7 @@ def _run_dynamic_programming(
     feed_in_cap_kwh: float | None = None,
     capabilities: PlatformCapabilities = DEFAULT_CAPABILITIES,
     min_grid_export_kwh: list[float] | None = None,
+    export_cap_kwh: list[float | None] | None = None,
 ) -> np.ndarray:
     """
     Run backward induction DP to compute optimal battery control policy.
@@ -1386,10 +1409,11 @@ def _run_dynamic_programming(
     sunrise/sunset crossover (#466) and extended to every such period by
     Phase 4b (#352).
 
-    `import_cap_kwh` and `min_grid_export_kwh`, when given, hold one entry per
-    period. Both are masked per state exactly as `select_action` filters its
-    candidates -- import cap first, then minimum export -- so V values only
-    policies the forward replay can execute (P1).
+    `import_cap_kwh`, `export_cap_kwh` and `min_grid_export_kwh`, when given,
+    hold one entry per period. All three are masked per state exactly as
+    `select_action` filters its candidates -- import cap, then export cap,
+    then minimum export -- so V values only policies the forward replay can
+    execute (P1).
 
     Also considers, at every state, a distinct SOLAR_EXPORT-below-max
     candidate (#313) -- battery SOE held exactly unchanged (no passive
@@ -1412,6 +1436,7 @@ def _run_dynamic_programming(
     # file.
     from core.bess.action_selector import (
         _battery_to_grid_cap_kwh,
+        _discharge_is_partial_cover,
         _discharge_is_unexecutable,
         _residual_cover_p,
         _residual_load_kwh,
@@ -1489,6 +1514,7 @@ def _run_dynamic_programming(
             else None
         )
         period_import_cap = import_cap_kwh[t] if import_cap_kwh is not None else None
+        period_export_cap = export_cap_kwh[t] if export_cap_kwh is not None else None
         period_min_export = (
             min_grid_export_kwh[t] if min_grid_export_kwh is not None else None
         )
@@ -1530,6 +1556,18 @@ def _run_dynamic_programming(
         # finer percent lattice really has than excluding it. Measured on all
         # 33 fixtures (2026-08-09): masking here helps 7 and hurts 10, net
         # -0.004 SEK -- approximation noise, not a real bug either way.
+        #
+        # Partial load covers ARE masked (#884): on whole-load hardware they
+        # are a whole band with no command behind it, not a proxy for one, and
+        # the whole cover the replay offers instead is the cover column below.
+        feasible &= ~is_discharge | ~_discharge_is_partial_cover(
+            np.abs(power_row),
+            home_consumption[t],
+            solar_production[t],
+            dt,
+            capabilities,
+            battery_settings,
+        )
         next_soe = _state_transition_grid(
             soe_col,
             power_row,
@@ -1698,8 +1736,33 @@ def _run_dynamic_programming(
                 (value_cover, cover_feasible, grid_exported_cover.reshape(-1))
             )
 
+        if period_export_cap is not None:
+            # Export cap (#910), "constrain, don't raise", after the import cap
+            # and before the minimum export -- the same filter in the same
+            # order as `select_action`. Its floor is the least export across
+            # every column, since the selector measures it over the bypass and
+            # residual-cover candidates too.
+            floor_grid_exported = np.min(
+                np.where(feasible, grid_exported, np.inf), axis=1
+            )
+            for _column_value, column_feasible, column_exported in extra_columns:
+                floor_grid_exported = np.minimum(
+                    floor_grid_exported,
+                    np.where(column_feasible, column_exported, np.inf),
+                )
+            effective_export_cap = np.maximum(period_export_cap, floor_grid_exported)
+            feasible &= grid_exported <= effective_export_cap.reshape(-1, 1) + 1e-9
+            extra_columns = [
+                (
+                    column_value,
+                    column_feasible & (column_exported <= effective_export_cap + 1e-9),
+                    column_exported,
+                )
+                for column_value, column_feasible, column_exported in extra_columns
+            ]
+
         if period_min_export is not None:
-            # Minimum export, "constrain, don't raise", AFTER the import cap --
+            # Minimum export, "constrain, don't raise", AFTER the fuse caps --
             # the same filter in the same order as `select_action`, which
             # states why. The achievable export is taken over every column,
             # since the bypass is often the only action that exports at all.
@@ -1890,6 +1953,7 @@ def _best_action_at_continuous_state(
     feed_in_cap_kwh: float | None = None,
     sell_price_floored: list[bool] | None = None,
     min_grid_export_kwh: list[float] | None = None,
+    export_cap_kwh: list[float | None] | None = None,
 ) -> tuple[float, float, float, float, PeriodFlows, float, float]:
     """The grid DP's forward replay: `action_selector.select_action` with the
     continuation value read off the already-known V[t+1, :] row, linearly
@@ -1939,6 +2003,7 @@ def _best_action_at_continuous_state(
             max_charge_power_per_period=max_charge_power_per_period,
             import_cap_kwh=import_cap_kwh,
             feed_in_cap_kwh=feed_in_cap_kwh,
+            export_cap_kwh=export_cap_kwh,
             min_grid_export_kwh=min_grid_export_kwh,
             capabilities=capabilities,
             sell_price_floored=sell_price_floored,
@@ -2346,6 +2411,7 @@ def optimize_battery_schedule(
     # needs no per-period list. `_period_ac_cap_kwh` makes its effect
     # per-period by folding it against each period's home_consumption.
     feed_in_cap_kwh = _effective_feed_in_cap_kwh(home_settings, dt)
+    export_cap_kwh = period_export_caps_kwh(home_settings, horizon, dt)
 
     logger.info(f"Optimization using dt={dt} hours for horizon={horizon} periods")
 
@@ -2426,6 +2492,7 @@ def optimize_battery_schedule(
         feed_in_cap_kwh=feed_in_cap_kwh,
         capabilities=capabilities,
         min_grid_export_kwh=min_grid_export_kwh_per_period,
+        export_cap_kwh=export_cap_kwh,
     )
 
     # Step 2: Reconstruct the optimal path with continuous SoE propagation.
@@ -2487,6 +2554,7 @@ def optimize_battery_schedule(
             feed_in_cap_kwh=feed_in_cap_kwh,
             sell_price_floored=sell_price_floored,
             min_grid_export_kwh=min_grid_export_kwh_per_period,
+            export_cap_kwh=export_cap_kwh,
         )
         tie_margins.append(tie_margin)
         value_slopes.append(value_slope)
@@ -2597,6 +2665,9 @@ def optimize_battery_schedule(
             window_import_cap = (
                 import_cap_kwh[sl] if import_cap_kwh is not None else None
             )
+            window_export_cap = (
+                export_cap_kwh[sl] if export_cap_kwh is not None else None
+            )
             window_min_export = (
                 min_grid_export_kwh_per_period[sl]
                 if min_grid_export_kwh_per_period is not None
@@ -2649,6 +2720,8 @@ def optimize_battery_schedule(
             # the constraint precisely where it is most likely to bind. The
             # minimum export is sliced and passed for the same reason: a window
             # solved without it could splice back a hold over a forced export.
+            # The export cap (#910) likewise: without it a window could splice
+            # back a discharge exporting more than the fuse carries.
             try:
                 V_window = run_pwl_window_backward_induction(
                     window_horizon=window_horizon,
@@ -2664,6 +2737,7 @@ def optimize_battery_schedule(
                     import_cap_kwh=window_import_cap,
                     feed_in_cap_kwh=feed_in_cap_kwh,
                     min_grid_export_kwh=window_min_export,
+                    export_cap_kwh=window_export_cap,
                 )
             except PWLWindowUnderRefinedError:
                 if window_horizon <= 1:
@@ -2700,6 +2774,7 @@ def optimize_battery_schedule(
                 feed_in_cap_kwh=feed_in_cap_kwh,
                 sell_price_floored=window_floored,
                 min_grid_export_kwh=window_min_export,
+                export_cap_kwh=window_export_cap,
             )
             window_resolutions[window.start] = resolution
             resolved_windows.append(window)

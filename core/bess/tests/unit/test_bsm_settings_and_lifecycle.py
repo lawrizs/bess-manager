@@ -7,6 +7,7 @@ using MockHomeAssistantController from conftest.
 import logging
 from collections.abc import Iterator
 from datetime import date, datetime, timedelta
+from typing import Any, ClassVar
 from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
@@ -147,6 +148,26 @@ class TestUpdateSettings:
         assert system._price_manager.grid_fee_morning == 0.08349
         assert system._price_manager.grid_fee_day == 0.10406
         assert system._price_manager.grid_fee_evening == 0.14641
+
+    def test_grid_tariff_synced_to_price_manager(self, system: Any) -> None:
+        """A tariff saved in Settings reaches the price manager without a restart (#861)."""
+        winter = [0.15] * 17 + [1.35] * 4 + [0.15] * 3
+        summer = [0.10] * 24
+        system.update_settings(
+            {
+                "price": {
+                    "grid_tariff_hourly": winter,
+                    "grid_tariff_summer_hourly": summer,
+                }
+            }
+        )
+        assert system.price_settings.grid_tariff_hourly == winter
+        assert system._price_manager.grid_tariff_hourly == winter
+        assert system._price_manager.grid_tariff_summer_hourly == summer
+
+    def test_malformed_grid_tariff_rejected(self, system: Any) -> None:
+        with pytest.raises(SystemConfigurationError):
+            system.update_settings({"price": {"grid_tariff_hourly": [0.4] * 23}})
 
     def test_invalid_settings_raises_system_configuration_error(self, system):
         with pytest.raises(SystemConfigurationError):
@@ -324,6 +345,70 @@ class TestResolveInitialPlatform:
             BatterySystemManager._resolve_initial_platform(
                 {"inverter": {"platform": "bogus"}}
             )
+
+
+class TestNordpoolHacsVatFollowsSettings:
+    """Issue #903: the configured VAT must govern a VAT-inclusive source.
+
+    The manager is built with default price settings (VAT 1.25) and the real
+    settings arrive afterwards through update_settings -- the same order
+    backend/app.py uses at startup. Raw 0.25282 is the reporter's FI
+    14:00 price; additional costs 0.082 and tax reduction -0.02 are theirs.
+    """
+
+    RAW = 0.25282
+
+    @pytest.mark.parametrize(
+        ("vat", "expected_buy", "expected_sell"),
+        [
+            # VAT 1.0: nothing stripped, nothing re-added
+            (1.0, 0.25282 + 0.082, 0.25282 - 0.02),
+            # VAT 1.255: strip and re-add cancel on buy; sell is VAT-exclusive
+            (1.255, 0.25282 + 0.082, 0.25282 / 1.255 - 0.02),
+        ],
+    )
+    def test_buy_and_sell_use_the_configured_vat(
+        self,
+        mock_controller: Any,
+        vat: float,
+        expected_buy: float,
+        expected_sell: float,
+    ) -> None:
+        today = time_utils.today()
+        raw_today = [
+            {
+                "start": f"{today.isoformat()}T{hour:02d}:{minute:02d}:00+02:00",
+                "value": self.RAW,
+            }
+            for hour in range(24)
+            for minute in (0, 15, 30, 45)
+        ]
+        mock_controller._api_request = lambda method, path: {
+            "attributes": {"raw_today": raw_today}
+        }
+        system = BatterySystemManager(
+            controller=mock_controller,
+            energy_provider_config={
+                "provider": "nordpool_hacs",
+                "nordpool_hacs": {"entity": "sensor.bess_nordpool_forecast"},
+            },
+            addon_options=_DEFAULT_OPTIONS,
+        )
+
+        system.update_settings(
+            {
+                "price": {
+                    "vat_multiplier": vat,
+                    "markup_rate": 0.0,
+                    "additional_costs": 0.082,
+                    "tax_reduction": -0.02,
+                }
+            }
+        )
+
+        period = system._price_manager.get_today_prices()[0]
+        assert period["buyPrice"] == pytest.approx(expected_buy, abs=1e-9)
+        assert period["sellPrice"] == pytest.approx(expected_sell, abs=1e-9)
 
 
 class TestCreatePriceSource:
@@ -703,11 +788,179 @@ class TestRefreshHealthCheck:
         mock_update.assert_not_called()
 
 
+class TestHealthBannerNeedsPersistence:
+    """#875: a bad check, typically integrations still loading after a restart,
+    must not raise a banner or leave a "recovered" note behind."""
+
+    FAILING: ClassVar[dict[str, Any]] = {
+        "status": "ERROR",
+        "checks": [
+            {
+                "name": "Battery Control",
+                "status": "ERROR",
+                "required": True,
+                "checks": [],
+            },
+        ],
+    }
+    HEALTHY: ClassVar[dict[str, Any]] = {
+        "status": "OK",
+        "checks": [{"name": "Battery Control", "status": "OK", "required": True}],
+    }
+    # Fails after the banner bookkeeping is done: a check result whose shape
+    # the logging step cannot read.
+    CRASHES_WHILE_LOGGING: ClassVar[dict[str, Any]] = {
+        "status": "ERROR",
+        "checks": [
+            {
+                "name": "Battery Control",
+                "status": "ERROR",
+                "required": True,
+                "checks": [{"status": "ERROR"}],
+            },
+        ],
+    }
+
+    @staticmethod
+    def _at(minutes: float) -> datetime:
+        return datetime(2026, 1, 1, 12, 0, tzinfo=TIMEZONE) + timedelta(minutes=minutes)
+
+    def _run(
+        self, system: BatterySystemManager, result: dict[str, Any], minutes: float
+    ) -> None:
+        with (
+            patch(
+                "core.bess.battery_system_manager.run_system_health_checks",
+                return_value=result,
+            ),
+            patch.object(system._controller, "get_device_maps", return_value=({}, {})),
+            patch(
+                "core.bess.battery_system_manager.time_utils.now",
+                return_value=self._at(minutes),
+            ),
+            # With no schedule yet, a healthy check also builds the first one,
+            # which is not what these tests are about.
+            patch.object(system, "_current_schedule", MagicMock()),
+        ):
+            system.refresh_health_check()
+
+    def _crash(self, system: BatterySystemManager, minutes: float) -> None:
+        with (
+            patch(
+                "core.bess.battery_system_manager.run_system_health_checks",
+                side_effect=RuntimeError("boom"),
+            ),
+            patch(
+                "core.bess.battery_system_manager.time_utils.now",
+                return_value=self._at(minutes),
+            ),
+        ):
+            system.refresh_health_check()
+
+    def test_a_single_failed_check_is_not_sustained(
+        self, system: BatterySystemManager
+    ) -> None:
+        self._run(system, self.FAILING, 0)
+
+        assert system.get_sustained_health_failures() == set()
+        # The live view is unaffected: only the banner waits.
+        assert system.get_critical_sensor_failures() == ["Battery Control"]
+
+    def test_still_failing_at_the_next_check_is_sustained(
+        self, system: BatterySystemManager
+    ) -> None:
+        self._run(system, self.FAILING, 0)
+        self._run(system, self.FAILING, 5)
+
+        assert system.get_sustained_health_failures() == {"Battery Control"}
+
+    def test_checks_seconds_apart_are_not_sustained(
+        self, system: BatterySystemManager
+    ) -> None:
+        """Startup's check and the next 5-minute tick can land seconds apart
+        while integrations are still loading."""
+        self._run(system, self.FAILING, 0)
+        self._run(system, self.FAILING, 0.2)
+
+        assert system.get_sustained_health_failures() == set()
+
+    def test_a_passing_check_restarts_the_clock(
+        self, system: BatterySystemManager
+    ) -> None:
+        self._run(system, self.FAILING, 0)
+        self._run(system, self.HEALTHY, 5)
+        self._run(system, self.FAILING, 10)
+
+        assert system.get_sustained_health_failures() == set()
+
+    def test_a_blip_leaves_no_recovery_note(self, system: BatterySystemManager) -> None:
+        self._run(system, self.FAILING, 0)
+        self._run(system, self.HEALTHY, 5)
+
+        assert system.get_health_recoveries() == []
+
+    def test_a_sustained_outage_leaves_a_recovery_note(
+        self, system: BatterySystemManager
+    ) -> None:
+        self._run(system, self.FAILING, 0)
+        self._run(system, self.FAILING, 5)
+        self._run(system, self.HEALTHY, 10)
+
+        assert len(system.get_health_recoveries()) == 1
+
+    def test_a_blip_does_not_clear_a_pending_recovery_note(
+        self, system: BatterySystemManager
+    ) -> None:
+        self._run(system, self.FAILING, 0)
+        self._run(system, self.FAILING, 5)
+        self._run(system, self.HEALTHY, 10)
+
+        self._run(system, self.FAILING, 15)
+
+        assert len(system.get_health_recoveries()) == 1
+
+    def test_a_health_check_that_keeps_crashing_raises_a_banner(
+        self, system: BatterySystemManager
+    ) -> None:
+        self._crash(system, 0)
+        assert system.get_sustained_health_failures() == set()
+
+        self._crash(system, 5)
+        assert system.get_sustained_health_failures() == {"System Health Check"}
+
+    def test_crashing_after_the_checks_ran_still_raises_a_banner(
+        self, system: BatterySystemManager
+    ) -> None:
+        self._run(system, self.CRASHES_WHILE_LOGGING, 0)
+        self._run(system, self.CRASHES_WHILE_LOGGING, 5)
+
+        assert "System Health Check" in system.get_sustained_health_failures()
+
+    def test_one_crash_does_not_erase_a_sustained_outage(
+        self, system: BatterySystemManager
+    ) -> None:
+        self._run(system, self.FAILING, 0)
+        self._run(system, self.FAILING, 5)
+
+        self._crash(system, 10)
+
+        assert "Battery Control" in system.get_sustained_health_failures()
+
+
 class TestHealthRecoveryTracking:
     """A component that goes ERROR/WARNING -> OK between health checks should
     be recorded as a recovery, surviving even if nobody was watching the live
     banner when it happened. See #215.
+
+    These pin what a recovery records, not how long an outage must last to
+    earn one (TestHealthBannerNeedsPersistence covers that).
     """
+
+    @pytest.fixture(autouse=True)
+    def _one_failed_check_is_sustained(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            BatterySystemManager, "HEALTH_BANNER_MIN_FAILURE_AGE", timedelta(0)
+        )
 
     def _run(self, system, result, device_maps=({}, {})):
         with (

@@ -481,8 +481,8 @@ delta stated in the PR. That is the intended behaviour, not a broken test.
 ### 6. Quality gate + code review (background)
 
 Every PR must pass both the fast and slow suites, plus code review. This is
-the long-wait step (slow suite ~4 min, measured 2026-08-11; the "~30 min"
-this used to claim predates the vectorized backward pass) — per `CLAUDE.md`'s Cost
+the long-wait step (slow suite ~3 min in parallel, measured 2026-11-08; the
+"~30 min" this used to claim predates the vectorized backward pass) — per `CLAUDE.md`'s Cost
 Discipline, do NOT hold the session open watching it run. Always a
 background `Agent` — this is not a choice to put to the user; asking
 "subagent or inline?" is itself the thing to stop doing (no `isolation` —
@@ -492,7 +492,7 @@ covering:
 
 1. `./scripts/quality-check.sh` (fast suite) — if it fails, fix and re-run,
    do not proceed with failures.
-2. `.venv/bin/pytest -m slow` (slow suite) — same failure handling.
+2. `.venv/bin/pytest -m slow -n auto` (slow suite) — same failure handling.
 3. If the diff touches the DP, intent classification, or control/rate
    mapping (the Step 5 table): confirm the diff's new/changed tests include
    a `run_scenario_realized` / `verify_plan_faithfulness` call, not only a
@@ -653,14 +653,13 @@ go straight to executing Option 2, do not present its 3-option menu, body:
 - Guard chosen: <mechanical check | skill-step change | prose rule | none, because …>
 - Budget: <rule replaced/merged/deleted | net +N lines, why | cap raised, why>
 
-Refs #<n>
+Resolves-on-release #<n>
 ```
 
-**Every PR body carries `Refs #<issue>`** — and only the graduation PR carries
-`Closes #<issue>`, per the no-auto-close rule. A beta or intermediate PR that
-used a closing verb would close the reporter's issue before the fix has shipped
-to them; one that referenced nothing at all would be invisible to the board,
-which associates PRs with issues by that line.
+**The fix PR carries `Resolves-on-release #<issue>`** — the non-closing fix
+verb that moves the issue to *In Verification*; related or partial work uses
+`Refs` (#907). Only the graduation PR carries `Closes #<issue>`, per the
+no-auto-close rule: earlier, it would close the issue before the fix ships.
 
 **These two sections are the point of the PR, not paperwork.** A reviewer
 cannot tell a real guard from a vacuous one by reading it — three times in

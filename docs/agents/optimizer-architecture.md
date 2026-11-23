@@ -77,14 +77,14 @@ and that the backward pass values every off-lattice candidate type the
 selector can choose. Removing that test re-opens the #236 bug class.
 
 Per-period constraints on flows follow the same rule. `select_action`
-filters its gathered candidates against the #429 import cap and then the
-minimum grid export (the Octopus Power Down pulse), each with a "constrain,
-don't raise" floor. Both backward passes apply those masks in the same order
-and over every column the selector sees, including the SOLAR_EXPORT bypass
-and residual cover. The same test file pins that V equals the selector's
-constrained value. The order matters: the fuse cap is physical, so the
-achievable export is measured over the fuse-feasible set, never the other
-way round. One narrow use of `_discharge_is_unexecutable` in the grid pass
+filters its gathered candidates against the #429 import cap, then the same
+fuse limit on export (#910), then the minimum grid export (the Octopus Power
+Down pulse), each with a "constrain, don't raise" floor. Both backward passes
+apply those masks in the same order and over every column the selector sees,
+including the SOLAR_EXPORT bypass and residual cover. The same test file pins
+that V equals the selector's constrained value. The order matters: the fuse
+caps are physical, so the achievable export is measured over the
+fuse-feasible set, never the other way round. One narrow use of `_discharge_is_unexecutable` in the grid pass
 is deliberate. That pass still does not mask those cells, but it leaves them
 out when measuring the achievable export. Their sub-resolution export is one
 the selector can never choose, so letting it set the requirement would value
@@ -243,14 +243,18 @@ written rate is.
 
 **Two questions, not one — do not collapse them.** "Is the rate register a
 ceiling" (`discharge_rate_is_load_following`, what the intra-period gate
-needs, since it writes a rate) and "is a load-support discharge delivered
-load-following" (`load_support_delivers_exact_cover`, what the cover
-candidate needs) have different answers on solax-modbus Growatt in VPP
-mode: the register is a forced power, but #413 makes LOAD_SUPPORT write no
-rate at all and release the period to the inverter's own self-use. Each is
-declared per controller and read through `PlatformCapabilities`; a caller
-reading either fact off a controller directly is the drift this phase
-removed.
+needs, since it writes a rate) and "how much of the deficit does a
+load-support period deliver" (`load_support_delivery`: `ceiling`,
+`whole_load` or `unmodelled`, what the cover candidates need) have different
+answers on two platforms. On solax-modbus Growatt in VPP mode the register
+is a forced power, but #413 makes LOAD_SUPPORT write no rate at all and
+release the period to the inverter's own self-use (`ceiling`). Solis has no
+rate at all, yet Self Use covers the whole deficit (#872), so its only
+deliverable covers are the whole one or none (`whole_load`, #884: partial
+covers are excluded from every pass via
+`action_selector._discharge_is_partial_cover`). Each is declared per
+controller and read through `PlatformCapabilities`; a caller reading either
+fact off a controller directly is the drift this phase removed.
 
 Consequences:
 

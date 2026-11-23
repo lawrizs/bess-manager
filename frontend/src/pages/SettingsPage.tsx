@@ -75,6 +75,7 @@ const EMPTY_PRICING: PricingForm = {
   area: '', markupRate: 0, vatMultiplier: 1.25, additionalCosts: 0,
   taxReduction: 0, spotMultiplier: 1.0, exportSpotMultiplier: 1.0,
   gridFeeEnabled: false, gridFeeNight: 0, gridFeeMorning: 0, gridFeeDay: 0, gridFeeEvening: 0,
+  gridTariffHourly: [], gridTariffSummerHourly: [],
 };
 const EMPTY_INVERTER: InverterForm = { inverterPlatform: 'growatt_server_min', deviceId: '', controlMode: 'tou' };
 
@@ -157,6 +158,20 @@ const SettingsPage: React.FC = () => {
   const [discovering, setDiscovering] = useState(false);
   const [lastDiscoveredAt, setLastDiscoveredAt] = useState<string | null>(null);
   const [powerDownCalendarDisabledBy, setPowerDownCalendarDisabledBy] = useState<string | undefined>(undefined);
+  // Backend capability, re-read after every save that can switch platform or control mode (#901)
+  const [realtimeFuseGuardSupported, setRealtimeFuseGuardSupported] = useState<boolean | undefined>(undefined);
+
+  // ── warn before a refresh/close discards unsaved edits (#857) ─────────
+  const hasUnsavedChanges = !loading && Object.values(isDirty).some(Boolean);
+  useEffect(() => {
+    if (!hasUnsavedChanges) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [hasUnsavedChanges]);
 
   // ── auto-dismiss toast ────────────────────────────────────────────────
   useEffect(() => {
@@ -176,6 +191,7 @@ const SettingsPage: React.FC = () => {
       ]);
 
       const s = settingsRes.data;
+      setRealtimeFuseGuardSupported(s.realtimeFuseGuardSupported);
       const bat_s = s.battery ?? {};
       const home_s = s.home ?? {};
       const elec_s = s.electricityPrice ?? {};
@@ -257,6 +273,8 @@ const SettingsPage: React.FC = () => {
         gridFeeMorning: elec_s.gridFeeMorning ?? 0,
         gridFeeDay: elec_s.gridFeeDay ?? 0,
         gridFeeEvening: elec_s.gridFeeEvening ?? 0,
+        gridTariffHourly: elec_s.gridTariffHourly ?? [],
+        gridTariffSummerHourly: elec_s.gridTariffSummerHourly ?? [],
       };
       setPricingForm(p);
       savedPricing.current = JSON.stringify(p);
@@ -502,6 +520,8 @@ const SettingsPage: React.FC = () => {
           gridFeeMorning: pricingForm.gridFeeMorning,
           gridFeeDay: pricingForm.gridFeeDay,
           gridFeeEvening: pricingForm.gridFeeEvening,
+          gridTariffHourly: pricingForm.gridTariffHourly,
+          gridTariffSummerHourly: pricingForm.gridTariffSummerHourly,
           useActualPrice: false,
         },
         energyProvider: {
@@ -596,6 +616,7 @@ const SettingsPage: React.FC = () => {
       });
       savedBattery.current = JSON.stringify(batteryForm);
       applyResolvedInverterDomain(saved);
+      setRealtimeFuseGuardSupported(saved.data?.realtimeFuseGuardSupported);
       setToast({ type: 'success', message: 'Battery settings saved.' });
     } catch (err) {
       setToast({ type: 'error', message: err instanceof Error ? err.message : 'Save failed.' });
@@ -633,6 +654,7 @@ const SettingsPage: React.FC = () => {
       savedSensors.current = stableStringify(sensors);
       savedPricing.current = JSON.stringify(pricingForm);
       applyResolvedInverterDomain(saved);
+      setRealtimeFuseGuardSupported(saved.data?.realtimeFuseGuardSupported);
       const failed = await checkAndUpdateSensorHealth(getActiveSensorsFlat(sensors));
       if (failed.length > 0) {
         setToast({
@@ -783,7 +805,12 @@ const SettingsPage: React.FC = () => {
 
           {/* ── Home ─────────────────────────────────────────────────────── */}
           {tab === 'home' && (
-            <HomeFormSection form={homeForm} onChange={setHomeForm} sensors={getActiveSensorsFlat(sensors)} />
+            <HomeFormSection
+              form={homeForm}
+              onChange={setHomeForm}
+              sensors={getActiveSensorsFlat(sensors)}
+              realtimeFuseGuardSupported={realtimeFuseGuardSupported}
+            />
           )}
 
           {/* ── Electricity Pricing ──────────────────────────────────────── */}

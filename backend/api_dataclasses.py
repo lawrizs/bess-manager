@@ -1206,6 +1206,8 @@ class APISetupCompletePayload(BaseModel):
     gridFeeMorning: float | None = None
     gridFeeDay: float | None = None
     gridFeeEvening: float | None = None
+    gridTariffHourly: list[float] | None = None
+    gridTariffSummerHourly: list[float] | None = None
     # Energy provider
     provider: str | None = None
     # Nordpool HACS entity (required when provider == "nordpool_hacs")

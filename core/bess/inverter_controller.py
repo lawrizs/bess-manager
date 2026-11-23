@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 from . import time_utils
 from .dp_schedule import DPSchedule
-from .execution_model import INTENT_TO_MODE, command_index
+from .execution_model import INTENT_TO_MODE, LOAD_SUPPORT_CEILING, command_index
 from .settings import BatterySettings
 from .strategic_intent import idle_hold_releasable
 
@@ -130,21 +130,20 @@ class InverterController(ABC):
     # full-power discharge instead of gently covering a dip (#324).
     discharge_rate_is_load_following: ClassVar[bool] = True
 
-    # Whether a planned LOAD_SUPPORT discharge is delivered as
-    # min(plan, actual load). Related to the flag above but NOT the same
-    # question, and the answers differ on solax_modbus VPP mode: there the
-    # rate register is a forced power (flag above False), yet LOAD_SUPPORT
-    # writes no rate at all -- #413 disables remote control for that intent
-    # and lets the inverter's own load-following self-use run the period, so
-    # a cover plan is delivered exactly (this flag True). True by default
-    # (TOU-register control, where the rate is a ceiling); False on native
-    # SolaX, which never received #413, and on the period-list platforms,
-    # which have no per-period control to deliver a partial cover with.
-    # Read by the optimizer through
-    # execution_model.PlatformCapabilities.load_support_delivers_exact_cover
-    # to decide whether the off-lattice exact-cover candidate (#466) is
-    # executable here (#580).
-    load_support_delivers_exact_cover: ClassVar[bool] = True
+    # How much of the house deficit a planned LOAD_SUPPORT period delivers --
+    # one of execution_model's LOAD_SUPPORT_* values. Related to the flag
+    # above but NOT the same question, and the answers differ on solax_modbus
+    # VPP mode: there the rate register is a forced power (flag above
+    # False), yet LOAD_SUPPORT writes no rate at all -- #413 disables remote
+    # control for that intent and lets the inverter's own load-following
+    # self-use run the period, so a cover plan is delivered exactly
+    # (`ceiling`). `ceiling` by default (TOU-register control, where the
+    # rate is a ceiling); `unmodelled` on native SolaX, which never received
+    # #413, and on SPH/Huawei; `whole_load` on Solis, whose Self Use covers
+    # the whole deficit (#884). Read by the optimizer through
+    # execution_model.PlatformCapabilities.load_support_delivery to decide
+    # which load-cover discharges are executable here (#580, #884).
+    load_support_delivery: ClassVar[str] = LOAD_SUPPORT_CEILING
 
     # Whether the default _write_period_to_hardware() should skip re-sending
     # a register (grid_charge/discharge_rate) that already matches the last
@@ -195,7 +194,9 @@ class InverterController(ABC):
         # Last register values successfully written by _write_period_to_hardware,
         # so repeat calls with an unchanged value skip the hardware write instead
         # of re-sending it (grid_charge/discharge_rate #402). None means unknown
-        # (always write). Left unset on a failed write so the next call retries.
+        # (always write). Reset to None on a failed write: a write can return
+        # an error and still reach the inverter, so the register's value is no
+        # longer known and the next command must not be skipped (#875).
         self._last_written_grid_charge: bool | None = None
         self._last_written_discharge_rate: int | None = None
         self._last_written_charge_rate: int | None = None
@@ -893,6 +894,8 @@ class InverterController(ABC):
         soc_values: list[float | None] | None = None,
         curtailed: list[bool] | None = None,
         planned_loads: list[float] | None = None,
+        solar_to_battery: list[float] | None = None,
+        grid_to_battery: list[float] | None = None,
     ) -> list[dict]:
         """Get period groups with full control parameters for display/API.
 
@@ -916,6 +919,12 @@ class InverterController(ABC):
                            (PeriodData.consumption_breakdown.planned, #813).
                            Summed into each group's planned_load_kwh for
                            display only -- it never affects grouping.
+            solar_to_battery: Optional per-period solar energy into the battery
+                              in kWh (#866). Summed into each group's
+                              solar_to_battery_kwh for display only.
+            grid_to_battery: Optional per-period grid energy into the battery
+                             in kWh (#866). Summed into each group's
+                             grid_to_battery_kwh for display only.
 
         Returns:
             List of period groups with all control parameters and time strings
@@ -976,6 +985,17 @@ class InverterController(ABC):
                         if planned_loads is not None and period < len(planned_loads)
                         else 0.0
                     ),
+                    "solar_to_battery_kwh": (
+                        solar_to_battery[period]
+                        if solar_to_battery is not None
+                        and period < len(solar_to_battery)
+                        else 0.0
+                    ),
+                    "grid_to_battery_kwh": (
+                        grid_to_battery[period]
+                        if grid_to_battery is not None and period < len(grid_to_battery)
+                        else 0.0
+                    ),
                 }
             )
 
@@ -997,6 +1017,8 @@ class InverterController(ABC):
                 current_group["count"] += 1
                 current_group["total_action_kwh"] += ps["action_kwh"]
                 current_group["planned_load_kwh"] += ps["planned_load_kwh"]
+                current_group["solar_to_battery_kwh"] += ps["solar_to_battery_kwh"]
+                current_group["grid_to_battery_kwh"] += ps["grid_to_battery_kwh"]
             else:
                 if current_group is not None:
                     groups.append(current_group)
@@ -1012,6 +1034,8 @@ class InverterController(ABC):
                     "count": 1,
                     "total_action_kwh": ps["action_kwh"],
                     "planned_load_kwh": ps["planned_load_kwh"],
+                    "solar_to_battery_kwh": ps["solar_to_battery_kwh"],
+                    "grid_to_battery_kwh": ps["grid_to_battery_kwh"],
                 }
 
         if current_group is not None:
@@ -1046,6 +1070,8 @@ class InverterController(ABC):
                     "soc_end_pct": soc_end,
                     "curtailed": group["curtailed"],
                     "planned_load_kwh": group["planned_load_kwh"],
+                    "solar_to_battery_kwh": group["solar_to_battery_kwh"],
+                    "grid_to_battery_kwh": group["grid_to_battery_kwh"],
                 }
             )
         return result
@@ -1177,6 +1203,7 @@ class InverterController(ABC):
                 self._last_written_grid_charge = grid_charge
             except Exception as e:
                 logger.error("FAILED: set_grid_charge(%s): %s", grid_charge, e)
+                self._last_written_grid_charge = None
                 errors.append(str(e))
 
         if self._discharge_rate_write_needed(discharge_rate):
@@ -1187,6 +1214,7 @@ class InverterController(ABC):
                 logger.error(
                     "FAILED: set_discharging_power_rate(%s): %s", discharge_rate, e
                 )
+                self._last_written_discharge_rate = None
                 errors.append(str(e))
 
         if errors:
@@ -1207,13 +1235,14 @@ class InverterController(ABC):
         exact cause unconfirmed, same spirit as #402).
         Same dedupe_register_writes policy as the register writes; on a failed
         write the exception propagates (adjust_charging_power's own handler logs
-        it) and _last_written is left unset so the next call retries.
+        it) and _last_written is reset so the next call always writes (#875).
         """
         if (
             self.dedupe_register_writes
             and charge_rate == self._last_written_charge_rate
         ):
             return
+        self._last_written_charge_rate = None
         controller.set_charging_power_rate(charge_rate)
         self._last_written_charge_rate = charge_rate
 

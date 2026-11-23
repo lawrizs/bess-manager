@@ -32,6 +32,11 @@ from .settings_store import SettingsStore, apply_signed_pair_aliases
 logger = logging.getLogger(__name__)
 # logger.setLevel(logging.DEBUG)
 
+# The five live power entities are read one after another, so a near-idle
+# house can balance slightly below zero from sampling skew alone (#598).
+# Beyond this the readings genuinely disagree and no load is reported.
+_LIVE_LOAD_SKEW_TOLERANCE_W = 100.0
+
 # Growatt GEN4 via solax_modbus: the single place that says which TOU slots the
 # product controls (#794). The suffix map, the setup wizard's required-sensor
 # list and the controller health check all derive from this — never restate it.
@@ -254,6 +259,13 @@ class HomeAssistantAPIController:
             "sensor_key": "battery_soc",
             "name": "Battery State of Charge",
             "unit": "%",
+            "precision": 1,
+            "conversion_threshold": None,
+        },
+        "get_battery_voltage": {
+            "sensor_key": "battery_voltage",
+            "name": "Battery Voltage",
+            "unit": "V",
             "precision": 1,
             "conversion_threshold": None,
         },
@@ -892,6 +904,9 @@ class HomeAssistantAPIController:
         "solis_modbus_inverter_dc_power_1": "pv_power",
         # ── Grid Time of Use v2 charge/discharge period times (6 slots) ───
         # unique key = f"time_entity_{register}" (time_sensors.py:34-63).
+        # Integration releases that fixed the dict-embedded unique_id write a
+        # clean suffix; older registries keep the embedded form (#869).
+        "solis_modbus_inverter_battery_voltage": "battery_voltage",
         "time_entity_43711": "solis_charge_start_1",
         "time_entity_43713": "solis_charge_end_1",
         "time_entity_43753": "solis_discharge_start_1",
@@ -936,6 +951,25 @@ class HomeAssistantAPIController:
         "43707_11": "solis_discharge_enable_6",
     }
 
+    # ── Solis per-slot discharge limits (#869). Matched only against number.*
+    # entities, because the integration also exposes each register as a
+    # read-only sensor.* carrying the identical unique_id suffix, and writing
+    # to that one fails.
+    SOLIS_DISCHARGE_LIMIT_SUFFIX_MAP: ClassVar[dict[str, str]] = {
+        **{
+            f"solis_modbus_inverter_tou_charge_cutoff_discharge_{slot}": (
+                f"solis_discharge_cutoff_soc_{slot}"
+            )
+            for slot in range(1, 7)
+        },
+        **{
+            f"solis_modbus_inverter_tou_discharge_v2_battery_current_{slot}": (
+                f"solis_discharge_current_{slot}"
+            )
+            for slot in range(1, 7)
+        },
+    }
+
     # ── Solis monitoring sensors affected by the dict-embedded unique_id bug
     # (see SOLIS_SUFFIX_MAP docstring above). Matched by a Solis-only
     # substring check on the verified ``'unique': '<key>'`` fragment — this
@@ -946,6 +980,7 @@ class HomeAssistantAPIController:
     # has the bug); values are BESS sensor keys.
     SOLIS_DICT_EMBEDDED_SUFFIX_MAP: ClassVar[dict[str, str]] = {
         "solis_modbus_inverter_battery_soc": "battery_soc",  # hybrid_sensors.py:656
+        "solis_modbus_inverter_battery_voltage": "battery_voltage",  # :665
         "solis_modbus_inverter_household_load_power": "local_load_power",  # :725
         "solis_modbus_inverter_total_battery_charge_energy": "lifetime_battery_charged",  # :811
         "solis_modbus_inverter_total_battery_discharge_energy": "lifetime_battery_discharged",  # :841
@@ -1215,7 +1250,9 @@ class HomeAssistantAPIController:
         """Validate sensors for multiple methods at once."""
         return [self.get_method_sensor_info(method) for method in method_list]
 
-    def get_entity_state_raw(self, entity_id: str) -> dict | None:
+    def get_entity_state_raw(
+        self, entity_id: str, optional: bool = False
+    ) -> dict | None:
         """Fetch raw HA state dict for a known entity ID.
 
         Intended for debug/export use where the caller already has a resolved
@@ -1224,6 +1261,11 @@ class HomeAssistantAPIController:
 
         Args:
             entity_id: Fully-qualified HA entity ID (e.g. "sensor.battery_soc")
+            optional: True when the caller is probing and a missing entity is
+                an expected outcome (e.g. a user-disabled TOU slot that has a
+                registry entry but no state). A 404 is then logged at debug
+                level instead of ERROR; it still raises, so the caller decides
+                what a missing entity means.
 
         Returns:
             Full HA state dict, or None if the entity does not exist
@@ -1233,6 +1275,7 @@ class HomeAssistantAPIController:
             f"/api/states/{entity_id}",
             operation=f"Fetch raw state for '{entity_id}'",
             category="sensor_read",
+            optional=optional,
         )
 
     def _api_request(
@@ -1450,21 +1493,43 @@ class HomeAssistantAPIController:
             k: v for k, v in kwargs.items() if k not in ("return_response", "blocking")
         }
 
-        # Make API call
-        return self._api_request(
+        resolved_category = category or (
+            "battery_control"
+            if service_domain in ["number", "input_number", "switch"]
+            else ("inverter_control" if is_vendor_domain else "other")
+        )
+        operation = operation or f"Call {service_domain}.{service_name}"
+
+        result = self._api_request(
             "post",
             path,
-            operation=operation or f"Call {service_domain}.{service_name}",
-            category=category
-            or (
-                "battery_control"
-                if service_domain in ["number", "input_number", "switch"]
-                else ("inverter_control" if is_vendor_domain else "other")
-            ),
+            operation=operation,
+            category=resolved_category,
             context=context,
             suppress_retry_warnings=suppress_retry_warnings,
             json=json_data,
         )
+
+        # #886: every write to the inverter, on every platform, passes through
+        # here, so this is the one place a write is recorded. The compact debug
+        # export keeps lines by the "HARDWARE:" marker alone -- a new write
+        # path needs no filter change to show up in a bundle.
+        if not is_safe_read:
+            logger.info(
+                "HARDWARE: %s (%s.%s %s)",
+                operation,
+                service_domain,
+                service_name,
+                context,
+            )
+
+        # A read succeeding says nothing about whether writes work again.
+        if self.failure_tracker and not is_safe_read:
+            self.failure_tracker.dismiss_by_category_and_entity(
+                resolved_category, context.get("entity_id")
+            )
+
+        return result
 
     def _get_raw_state(self, sensor_name: str) -> str | None:
         """Get raw state string from HA. Returns None if not configured or unavailable."""
@@ -1735,6 +1800,10 @@ class HomeAssistantAPIController:
     def get_battery_soc(self):
         """Get the battery state of charge (SOC)."""
         return self._get_sensor_value("battery_soc")
+
+    def get_battery_voltage(self) -> float | None:
+        """Get the battery voltage."""
+        return self._get_sensor_value("battery_voltage")
 
     def get_charge_stop_soc(self):
         """Get the charge stop state of charge (SOC)."""
@@ -2330,6 +2399,32 @@ class HomeAssistantAPIController:
             operation=f"Solis {direction} slot {slot} enabled={enabled}",
             entity_id=enable_entity,
         )
+
+    def set_solis_discharge_cutoff_soc(self, slot: int, soc: int) -> None:
+        """Set the SOC one Solis discharge slot (1-6) stops discharging at."""
+        entity_id = self._get_entity_for_service(f"solis_discharge_cutoff_soc_{slot}")
+        logger.info("Set Solis discharge slot %d cut-off -> %s%%", slot, soc)
+        self._set_number_like(
+            entity_id, soc, f"Set Solis discharge slot {slot} cut-off"
+        )
+
+    def set_solis_discharge_current(self, slot: int, amps: float) -> None:
+        """Set the battery current one Solis discharge slot (1-6) runs at."""
+        entity_id = self._get_entity_for_service(f"solis_discharge_current_{slot}")
+        logger.info("Set Solis discharge slot %d current -> %s A", slot, amps)
+        self._set_number_like(
+            entity_id, amps, f"Set Solis discharge slot {slot} current"
+        )
+
+    def missing_solis_discharge_limit_sensors(self) -> list[str]:
+        """Sensor keys needed to set discharge limits that are not configured."""
+        missing = []
+        for key in [*self.SOLIS_DISCHARGE_LIMIT_SUFFIX_MAP.values(), "battery_voltage"]:
+            try:
+                self._resolve_entity_id(key)
+            except ValueError:
+                missing.append(key)
+        return missing
 
     def read_solis_periods(self, direction: str) -> list[dict]:
         """Read all 6 Solis Grid TOU v2 periods for one direction from HA entity states.
@@ -3021,8 +3116,61 @@ class HomeAssistantAPIController:
         return self._get_sensor_value("export_power")
 
     def get_local_load_power(self):
-        """Get current home load power in watts."""
-        return self._get_sensor_value("local_load_power")
+        """Get current home load power in watts.
+
+        Reads the mapped load entity when it has a value, otherwise derives
+        the load from the live power balance — the real-time counterpart of
+        :meth:`get_load_consumption_lifetime`. huawei_solar has no load
+        register outside an EMMA (#818), so meterless installs always take the
+        derived path (#598).
+
+        Returns ``None`` when any of the five power readings is unreadable,
+        since dropping a term reports load plus that flow (issue #528), and
+        when the balance is negative by more than
+        ``_LIVE_LOAD_SKEW_TOLERANCE_W``, which means the inputs disagree.
+        """
+        direct = self._get_sensor_value("local_load_power")
+        if direct is not None:
+            return direct
+
+        inputs = {
+            "pv_power": self.get_pv_power(),
+            "import_power": self.get_import_power(),
+            "export_power": self.get_export_power(),
+            "battery_charge_power": self.get_battery_charge_power(),
+            "battery_discharge_power": self.get_battery_discharge_power(),
+        }
+        missing = [key for key, value in inputs.items() if value is None]
+        if missing:
+            logger.warning(
+                "Cannot derive home load power: %s unreadable "
+                "(unmapped or unavailable). All five power readings are required.",
+                ", ".join(missing),
+            )
+            return None
+        derived = derive_load_consumption(
+            solar_production=inputs["pv_power"],
+            import_from_grid=inputs["import_power"],
+            export_to_grid=inputs["export_power"],
+            battery_charged=inputs["battery_charge_power"],
+            battery_discharged=inputs["battery_discharge_power"],
+        )
+        if derived >= 0:
+            return derived
+        if derived >= -_LIVE_LOAD_SKEW_TOLERANCE_W:
+            return 0.0
+        logger.warning(
+            "Derived home load power is negative (%.0f W) - power readings "
+            "disagree, so no value can be reported. pv=%.0f import=%.0f "
+            "export=%.0f charge=%.0f discharge=%.0f",
+            derived,
+            inputs["pv_power"],
+            inputs["import_power"],
+            inputs["export_power"],
+            inputs["battery_charge_power"],
+            inputs["battery_discharge_power"],
+        )
+        return None
 
     def get_net_battery_power(self):
         """Get net battery power (positive = charging, negative = discharging) in watts."""
@@ -4291,7 +4439,7 @@ class HomeAssistantAPIController:
         )
 
     def _match_solis_dict_embedded_entities(
-        self, entities: list[dict]
+        self, entities: list[dict], unique_key_map: dict[str, str]
     ) -> tuple[dict[str, str], dict[str, str]]:
         """Map Solis monitoring entities affected by the dict-embedded unique_id bug.
 
@@ -4317,7 +4465,7 @@ class HomeAssistantAPIController:
         """
         result: dict[str, str] = {}
         disabled_matches: dict[str, str] = {}
-        for key, bess_key in self.SOLIS_DICT_EMBEDDED_SUFFIX_MAP.items():
+        for key, bess_key in unique_key_map.items():
             if bess_key in result:
                 continue
             pattern = re.compile(r"'unique':\s*'" + re.escape(key) + r"'")
@@ -4534,7 +4682,7 @@ class HomeAssistantAPIController:
             # Solis-scoped matcher (see SOLIS_DICT_EMBEDDED_SUFFIX_MAP) —
             # merge them in without touching _map_registry_entities.
             embedded, embedded_disabled = self._match_solis_dict_embedded_entities(
-                entities
+                entities, self.SOLIS_DICT_EMBEDDED_SUFFIX_MAP
             )
             solis_sensors.update(
                 {k: v for k, v in embedded.items() if k not in solis_sensors}
@@ -4542,6 +4690,21 @@ class HomeAssistantAPIController:
             solis_disabled.update(
                 {k: v for k, v in embedded_disabled.items() if k not in solis_disabled}
             )
+            number_entities = [
+                e for e in entities if str(e.get("entity_id", "")).startswith("number.")
+            ]
+            for limit_sensors, limit_disabled in (
+                self._map_registry_entities(
+                    number_entities,
+                    solis_platforms,
+                    self.SOLIS_DISCHARGE_LIMIT_SUFFIX_MAP,
+                ),
+                self._match_solis_dict_embedded_entities(
+                    number_entities, self.SOLIS_DISCHARGE_LIMIT_SUFFIX_MAP
+                ),
+            ):
+                solis_sensors.update(limit_sensors)
+                solis_disabled.update(limit_disabled)
             # Solis has no separate export_power entity — grid_power_net is
             # a single signed sensor (see SOLIS_SUFFIX_MAP comment); pair
             # export_power to it (#475, same reason as SolaX's battery pair

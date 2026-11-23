@@ -82,6 +82,31 @@ test.describe('Settings Page', () => {
     await expect(page.getByText(/Nord Pool/i).first()).toBeVisible();
   });
 
+  test('refresh is guarded only while there are unsaved edits (#857)', async ({ page }) => {
+    await page.goto('/settings');
+    await expect(page.getByText('Loading settings')).not.toBeVisible({ timeout: 15_000 });
+
+    // A page-level beforeunload handler that calls preventDefault() is what
+    // makes the browser ask before discarding edits.
+    const guardsUnload = () =>
+      page.evaluate(() => {
+        const e = new Event('beforeunload', { cancelable: true });
+        window.dispatchEvent(e);
+        return e.defaultPrevented;
+      });
+
+    expect(await guardsUnload()).toBe(false);
+
+    await page.getByRole('button', { name: 'Battery', exact: true }).click();
+    const capacityInput = page.locator('label').filter({ hasText: /Total Capacity/i }).locator('input');
+    const originalValue = await capacityInput.inputValue();
+    await capacityInput.fill(String(Number(originalValue) + 1));
+    expect(await guardsUnload()).toBe(true);
+
+    await capacityInput.fill(originalValue);
+    expect(await guardsUnload()).toBe(false);
+  });
+
   test('editing battery capacity enables save and persists', async ({ page }) => {
     await page.goto('/settings');
     await expect(page.getByText('Loading settings')).not.toBeVisible({ timeout: 15_000 });
@@ -189,6 +214,36 @@ test.describe('Settings Page', () => {
     // Restore the fixture: window back on, peak shaving off.
     await page.getByRole('switch', { name: 'Only during a time window' }).click();
     await page.getByRole('switch', { name: 'Enable peak shaving' }).click();
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(page.getByText(/saved|success/i).first()).toBeVisible({ timeout: 5_000 });
+  });
+
+  test('hourly grid tariff with summer/winter profiles persists (#861)', async ({ page }) => {
+    await page.goto('/settings');
+    await expect(page.getByText('Loading settings')).not.toBeVisible({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'Electricity Pricing', exact: true }).click();
+
+    const tariffSwitch = page.getByRole('switch', { name: 'Hourly grid tariff' });
+    await expect(tariffSwitch).toHaveAttribute('aria-checked', 'false');
+    await tariffSwitch.click();
+    await page.getByLabel(/All year .* 17:00/).fill('1.35');
+
+    await page.getByRole('switch', { name: 'Separate summer and winter tariffs' }).click();
+    await page.getByLabel(/Summer, Apr–Sep .* 17:00/).fill('0.6');
+
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(page.getByText(/saved|success/i).first()).toBeVisible({ timeout: 5_000 });
+
+    await page.reload();
+    await expect(page.getByText('Loading settings')).not.toBeVisible({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'Electricity Pricing', exact: true }).click();
+
+    await expect(page.getByLabel(/Winter, Oct–Mar .* 17:00/)).toHaveValue('1.35');
+    await expect(page.getByLabel(/Winter, Oct–Mar .* 16:00/)).toHaveValue('0');
+    await expect(page.getByLabel(/Summer, Apr–Sep .* 17:00/)).toHaveValue('0.6');
+
+    // Restore the fixture: tariff off.
+    await page.getByRole('switch', { name: 'Hourly grid tariff' }).click();
     await page.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(page.getByText(/saved|success/i).first()).toBeVisible({ timeout: 5_000 });
   });

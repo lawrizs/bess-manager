@@ -154,7 +154,7 @@ class TestWriteSchedule:
         ha.get_huawei_working_mode.return_value = "time_of_use_luna2000"
         ha.read_huawei_tou_periods.return_value = ["02:00-02:59/1234567/+"]
         controller.sync_to_hardware(ha, 0)
-        ha.write_huawei_tou_periods.assert_called_once_with("")
+        ha.write_huawei_tou_periods.assert_called_once_with("00:00-00:14//+")
 
     def test_write_schedule_raises_for_lg_resu_battery(
         self, controller: HuaweiController
@@ -355,6 +355,10 @@ class FakeHuaweiInverter:
         return self.periods_text.splitlines() if self.periods_text else []
 
     def write_huawei_tou_periods(self, periods_text: str) -> None:
+        # huawei_solar's set_tou_periods parses "".split("\n") as one empty
+        # period and fails the call with HTTP 500 — it cannot clear the list.
+        if periods_text == "":
+            raise RuntimeError("500 Server Error: set_tou_periods")
         self.periods_text = periods_text
         self.write_count += 1
 
@@ -394,6 +398,105 @@ def run_cycle(
         controller.apply_intents(schedule)
         controller.sync_to_hardware(inverter, 0)
     return differs
+
+
+def run_cycle_with_retry(
+    controller: HuaweiController,
+    inverter: FakeHuaweiInverter,
+    schedule: MagicMock,
+    write_pending: bool,
+) -> bool:
+    """One cycle including battery_system_manager's failed-write retry.
+
+    A pending retry forces the apply without consulting evaluate_intents
+    (_evaluate_schedule_application), and a sync that raises leaves the retry
+    pending (_apply_schedule's except branch). Returns the new pending flag.
+    """
+    if not write_pending:
+        differs, _ = controller.evaluate_intents(schedule)
+        if not differs:
+            return False
+    controller.apply_intents(schedule)
+    try:
+        controller.sync_to_hardware(inverter, 0)
+    except Exception:
+        return True
+    return False
+
+
+class FlakyHuaweiInverter(FakeHuaweiInverter):
+    """A battery whose next writes of a kind fail with HTTP 500, then work."""
+
+    def __init__(self, periods_text: str = "", failing: dict | None = None) -> None:
+        super().__init__(periods_text)
+        self.failing = dict(failing or {})
+        self.grid_charge: bool | None = None
+
+    def _maybe_fail(self, operation: str) -> None:
+        if self.failing.get(operation, 0) > 0:
+            self.failing[operation] -= 1
+            raise RuntimeError(f"500 Server Error: {operation}")
+
+    def write_huawei_tou_periods(self, periods_text: str) -> None:
+        self._maybe_fail("write_huawei_tou_periods")
+        super().write_huawei_tou_periods(periods_text)
+
+    def set_grid_charge(self, enabled: bool) -> None:
+        self._maybe_fail("set_grid_charge")
+        self.grid_charge = enabled
+
+
+class TestFailedWritesAreRetried:
+    """A write the battery rejected must not count as applied (#916).
+
+    evaluate_intents compares the next plan against BESS's own model, which
+    apply_intents has already moved to the new plan. If sync_to_hardware
+    swallows the failure, every later cycle sees "schedules match" and the
+    battery keeps the old periods until the next add-on restart.
+    """
+
+    def test_stale_discharge_is_cleared_after_a_failed_write(
+        self, battery_settings: BatterySettings
+    ) -> None:
+        inverter = FlakyHuaweiInverter(
+            "07:45-07:59/1234567/-", failing={"write_huawei_tou_periods": 1}
+        )
+        controller = restart_against(inverter, battery_settings)
+        idle = make_schedule_mock(make_intents({}))
+
+        pending = run_cycle_with_retry(controller, inverter, idle, False)
+        assert inverter.periods_text == "07:45-07:59/1234567/-"
+        run_cycle_with_retry(controller, inverter, idle, pending)
+
+        assert inverter.read_huawei_tou_periods() == ["00:00-00:14//+"]
+
+    def test_grid_charge_is_set_after_a_failed_write(
+        self, battery_settings: BatterySettings
+    ) -> None:
+        """Fails even when the period write itself succeeds: the battery then
+        holds the charge period with grid charging off, and the retry has to
+        fix the grid-charge switch without rewriting the periods."""
+        inverter = FlakyHuaweiInverter("00:00-00:14//+", failing={"set_grid_charge": 1})
+        controller = restart_against(inverter, battery_settings)
+        charge = make_schedule_mock(make_intents({2: "GRID_CHARGING"}))
+
+        pending = run_cycle_with_retry(controller, inverter, charge, False)
+        run_cycle_with_retry(controller, inverter, charge, pending)
+
+        assert inverter.grid_charge is True
+        assert inverter.write_count == 1
+
+    def test_failed_write_still_attempts_the_other_writes(
+        self, battery_settings: BatterySettings
+    ) -> None:
+        inverter = FlakyHuaweiInverter(failing={"set_grid_charge": 1})
+        controller = HuaweiController(battery_settings=battery_settings)
+        controller.apply_intents(make_schedule_mock(make_intents({2: "GRID_CHARGING"})))
+
+        with pytest.raises(RuntimeError, match="set_grid_charge"):
+            controller.sync_to_hardware(inverter, 0)
+
+        assert inverter.periods_text == "02:00-02:59/1234567/+"
 
 
 class TestTouReadback:
@@ -488,6 +591,38 @@ class TestTouReadback:
         second.sync_to_hardware(inverter, 0)
 
         assert inverter.periods_text == text_after_first
+
+    def test_idle_plan_clears_periods_left_on_the_battery(
+        self, battery_settings: BatterySettings
+    ) -> None:
+        """Periods from an earlier plan repeat every day until replaced.
+
+        Left in place, yesterday's discharge window drains the battery into
+        the house again today while BESS believes it planned IDLE.
+        """
+        inverter = FakeHuaweiInverter("14:45-15:29/1234567/-\n15:45-20:29/1234567/-")
+        restarted = restart_against(inverter, battery_settings)
+
+        wrote = run_cycle(restarted, inverter, make_schedule_mock(make_intents({})))
+
+        assert wrote is True
+        assert inverter.periods_text == "00:00-00:14//+"
+
+    def test_cleared_battery_is_not_rewritten_after_restart(
+        self, battery_settings: BatterySettings
+    ) -> None:
+        """A battery holding only a no-days period holds no schedule.
+
+        Reading it back as a real period would make every restart during an
+        idle plan rewrite the battery's flash for nothing.
+        """
+        inverter = FakeHuaweiInverter("00:00-00:14//+")
+        restarted = restart_against(inverter, battery_settings)
+
+        wrote = run_cycle(restarted, inverter, make_schedule_mock(make_intents({})))
+
+        assert wrote is False
+        assert inverter.write_count == 0
 
     def test_unparseable_period_text_raises(
         self, battery_settings: BatterySettings

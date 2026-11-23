@@ -195,8 +195,8 @@ this skill is where they get written. Both end the same way: **stop, write
 
 Since PR cards do not exist on the board — `Priority` and `Awaiting` live on
 the issue, so they cannot be ambiguous between two cards for one piece of
-work — resolve the PR's issue first. **If the PR body carries no `Refs #N`
-or `Closes #N` at all, stop here and report it rather than let the lookup
+work — resolve the PR's issue first. **If the PR body carries no `Resolves-on-release #N`,
+`Refs #N` or `Closes #N` at all, stop here and report it rather than let the lookup
 degrade into an empty `$item`** — spec §4 calls an orphan PR a reported
 defect, not a normal shape this skill should paper over.
 
@@ -225,10 +225,7 @@ scripts/gh-agent.sh --as dev pr comment <n> --body "..."
 Resolve `<awaiting-field-id>` and `<maintainer-option-id>` once via
 `gh project field-list "$PROJECT_NUMBER" --owner johanzander --format json` —
 don't hardcode them, the board is the source of truth for its own field
-shape. (As of this writing the `maintainer` option itself does not exist yet
-on the live board — adding it is the Task 1 board migration, held for the
-maintainer to run by hand per this plan's own review Ruling 6. This skill's
-job is to write to it correctly once it exists, not to create it.)
+shape. The `maintainer` option exists on the live board.
 
 - **Semantic conflict.** `git merge origin/main` produced conflicts that are
   not textual — the two sides disagree about *behaviour*, not just about

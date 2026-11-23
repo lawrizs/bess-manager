@@ -16,6 +16,7 @@ import numpy as np
 from core.bess.action_selector import (
     PeriodInputs,
     _battery_to_grid_cap_kwh,
+    _discharge_is_partial_cover,
     _discharge_is_unexecutable,
     _residual_cover_p,
     _residual_load_kwh,
@@ -114,9 +115,10 @@ def _pwl_candidate_values_at(
     dt: float,
     period_max_charge: float | None,
     import_cap_kwh: float | None = None,
-    feed_in_cap_kwh: float | None = None,
     capabilities: PlatformCapabilities = DEFAULT_CAPABILITIES,
     min_grid_export_kwh: float | None = None,
+    export_cap_kwh: float | None = None,
+    feed_in_cap_kwh: float | None = None,
 ) -> np.ndarray:
     """Best achievable value at each SOE in `X` for period `t`, evaluated in
     bounded row blocks (#697).
@@ -145,8 +147,11 @@ def _pwl_candidate_values_at(
     constraining rather than excluding a period whose load alone exceeds the
     cap.
 
+    `export_cap_kwh` is the same fuse limit on grid export (#910), masked
+    right after the import cap with the same floor.
+
     `min_grid_export_kwh` is the period's minimum grid export, masked after
-    the import cap with the same "constrain, don't raise" floor, exactly as
+    both fuse caps with the same "constrain, don't raise" floor, exactly as
     `select_action` filters its candidates."""
     X = np.asarray(X)
     # `_pwl_candidate_values_block` appends one SOLAR_EXPORT-bypass column and
@@ -174,9 +179,10 @@ def _pwl_candidate_values_at(
             dt,
             period_max_charge,
             import_cap_kwh,
-            feed_in_cap_kwh,
             capabilities,
             min_grid_export_kwh,
+            export_cap_kwh,
+            feed_in_cap_kwh,
         )
     return np.concatenate(
         [
@@ -190,9 +196,10 @@ def _pwl_candidate_values_at(
                 dt,
                 period_max_charge,
                 import_cap_kwh,
-                feed_in_cap_kwh,
                 capabilities,
                 min_grid_export_kwh,
+                export_cap_kwh,
+                feed_in_cap_kwh,
             )
             for i in range(0, X.size, block)
         ]
@@ -209,9 +216,10 @@ def _pwl_candidate_values_block(
     dt: float,
     period_max_charge: float | None,
     import_cap_kwh: float | None = None,
-    feed_in_cap_kwh: float | None = None,
     capabilities: PlatformCapabilities = DEFAULT_CAPABILITIES,
     min_grid_export_kwh: float | None = None,
+    export_cap_kwh: float | None = None,
+    feed_in_cap_kwh: float | None = None,
 ) -> np.ndarray:
     """One block of `_pwl_candidate_values_at`: max over the shared action set
     (IDLE, STORE, discharge grid) plus the SOLAR_EXPORT-below-max bypass
@@ -348,6 +356,16 @@ def _pwl_candidate_values_block(
     feasible &= ~is_discharge | ~_discharge_is_unexecutable(
         np.abs(power_row), home_consumption[t], solar_production[t], dt
     )
+    # Partial load covers (#884), masked here for the same reason and through
+    # the same shared definition the replay filters its candidates with.
+    feasible &= ~is_discharge | ~_discharge_is_partial_cover(
+        np.abs(power_row),
+        home_consumption[t],
+        solar_production[t],
+        dt,
+        capabilities,
+        battery_settings,
+    )
 
     feasible &= (next_soe >= min_soe) & (next_soe <= max_soe)
 
@@ -404,8 +422,26 @@ def _pwl_candidate_values_block(
         if effective_import_cap is not None:
             bypass_feasible = grid_imported_bypass <= effective_import_cap + 1e-9
 
+    if export_cap_kwh is not None:
+        # Export cap (#910), "constrain, don't raise", after the import cap --
+        # identical order and arithmetic to `select_action` and to
+        # `_run_dynamic_programming`'s own mask. The floor spans the bypass
+        # column, which the selector also measures it over.
+        floor_grid_exported = np.min(
+            np.where(feasible, grid_exported, np.inf), axis=1, keepdims=True
+        )
+        if has_bypass:
+            floor_grid_exported = np.minimum(
+                floor_grid_exported,
+                np.where(bypass_feasible, grid_exported_bypass, np.inf),
+            )
+        effective_export_cap = np.maximum(export_cap_kwh, floor_grid_exported)
+        feasible &= grid_exported <= effective_export_cap + 1e-9
+        if has_bypass:
+            bypass_feasible &= grid_exported_bypass <= effective_export_cap + 1e-9
+
     if min_grid_export_kwh is not None:
-        # Minimum export, "constrain, don't raise", after the import cap --
+        # Minimum export, "constrain, don't raise", after the fuse caps --
         # identical order and arithmetic to `select_action` and to
         # `_run_dynamic_programming`'s own mask. The achievable export spans
         # the bypass column too: at an empty battery it is often the only
@@ -490,6 +526,7 @@ def _pwl_best_action_at_continuous_state(
     feed_in_cap_kwh: float | None = None,
     sell_price_floored: list[bool] | None = None,
     min_grid_export_kwh: list[float] | None = None,
+    export_cap_kwh: list[float | None] | None = None,
 ) -> tuple[float, float, float, float, PeriodFlows]:
     """The PWL window's forward replay: `action_selector.select_action` with
     the continuation value read off the resolved PWL row `V[t+1]`, evaluated
@@ -505,8 +542,9 @@ def _pwl_best_action_at_continuous_state(
     `_discretize_state_action_space`.
 
     `import_cap_kwh` is the house fuse's per-period grid-import ceiling
-    (#429) and `min_grid_export_kwh` the period's minimum grid export; both
-    must be the values the backward induction ran with.
+    (#429), `export_cap_kwh` the same fuse limit on export (#910), and
+    `min_grid_export_kwh` the period's minimum grid export; all three must be
+    the values the backward induction ran with.
 
     Returns (best_action, best_next_soe, best_new_cost_basis, best_reward,
     best_flows). `best_flows` is the winning candidate's own `PeriodFlows`,
@@ -529,6 +567,7 @@ def _pwl_best_action_at_continuous_state(
             max_charge_power_per_period=max_charge_power_per_period,
             import_cap_kwh=import_cap_kwh,
             feed_in_cap_kwh=feed_in_cap_kwh,
+            export_cap_kwh=export_cap_kwh,
             min_grid_export_kwh=min_grid_export_kwh,
             capabilities=capabilities,
             sell_price_floored=sell_price_floored,
@@ -806,6 +845,7 @@ def run_pwl_window_backward_induction(
     import_cap_kwh: list[float | None] | None = None,
     feed_in_cap_kwh: float | None = None,
     min_grid_export_kwh: list[float] | None = None,
+    export_cap_kwh: list[float | None] | None = None,
 ) -> list[tuple[np.ndarray, np.ndarray]]:
     """Exact PWL backward induction over a short sub-horizon window whose end
     SOE is pinned to `end_soe_target` (see `_pinned_terminal_row`).
@@ -844,6 +884,9 @@ def run_pwl_window_backward_induction(
     `feed_in_cap_kwh` carries the same obligation for the DSO's feed-in
     ceiling: a window re-solved without it splices back an action exporting
     more than the connection allows, precisely where the constraint binds.
+    `export_cap_kwh` is the per-period fuse limit on grid export (#910),
+    passed for the matching reason: a window solved without it could value a
+    discharge exporting more than the fuse carries.
 
     Infeasible targets are not an error: if the window physically cannot
     reach `end_soe_target` from the caller's start SOE (rate limits, the
@@ -895,6 +938,7 @@ def run_pwl_window_backward_induction(
         period_min_export = (
             min_grid_export_kwh[t] if min_grid_export_kwh is not None else None
         )
+        period_export_cap = export_cap_kwh[t] if export_cap_kwh is not None else None
 
         def values_at(
             X: np.ndarray,
@@ -902,6 +946,7 @@ def run_pwl_window_backward_induction(
             _pmc=period_max_charge,
             _cap=period_import_cap,
             _min_export=period_min_export,
+            _export_cap=period_export_cap,
         ) -> np.ndarray:
             return _pwl_candidate_values_at(
                 X,
@@ -913,9 +958,10 @@ def run_pwl_window_backward_induction(
                 dt,
                 _pmc,
                 _cap,
-                feed_in_cap_kwh,
                 capabilities,
                 _min_export,
+                _export_cap,
+                feed_in_cap_kwh,
             )
 
         X = _pwl_window_seed_points(
@@ -1035,6 +1081,7 @@ def resolve_pwl_window(
     feed_in_cap_kwh: float | None = None,
     sell_price_floored: list[bool] | None = None,
     min_grid_export_kwh: list[float] | None = None,
+    export_cap_kwh: list[float | None] | None = None,
 ) -> list[tuple[float, float, PeriodFlows]]:
     """Forward-replay the window's resolved value table `V` (from
     `run_pwl_window_backward_induction`) into a concrete action sequence,
@@ -1052,8 +1099,8 @@ def resolve_pwl_window(
 
     `import_cap_kwh` must be the same per-period grid-import caps the
     backward induction was run with, so the replayed actions obey the same
-    constraint the value table was built under. `feed_in_cap_kwh` and
-    `min_grid_export_kwh` likewise.
+    constraint the value table was built under. `feed_in_cap_kwh`,
+    `min_grid_export_kwh` and `export_cap_kwh` likewise.
 
     Returns `[(power, next_soe), ...]` for each of the window's periods.
     """
@@ -1088,6 +1135,7 @@ def resolve_pwl_window(
             feed_in_cap_kwh=feed_in_cap_kwh,
             sell_price_floored=sell_price_floored,
             min_grid_export_kwh=min_grid_export_kwh,
+            export_cap_kwh=export_cap_kwh,
         )
         actions.append((action, next_soe, flows))
         soe = next_soe

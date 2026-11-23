@@ -7,6 +7,7 @@ Coverage goals:
 """
 
 import sys
+from collections.abc import Callable
 from copy import deepcopy
 from unittest.mock import MagicMock
 
@@ -558,6 +559,37 @@ class TestSetupComplete:
         elec = call_args["electricity_price"]
         assert elec["spot_multiplier"] == 1.0175
         assert elec["export_spot_multiplier"] == 1.018
+
+    def test_grid_tariff_profiles_persisted_and_sent_live(
+        self, complete_controller: MagicMock
+    ) -> None:
+        """The wizard shares the pricing form, so its tariff must not be dropped (#861)."""
+        winter = [0.45] * 24
+        summer = [0.23] * 24
+        payload = _full_wizard_payload(
+            gridTariffHourly=winter, gridTariffSummerHourly=summer
+        )
+        resp = _client.post("/api/setup/complete", json=payload)
+        assert resp.status_code == 200
+        elec = complete_controller.settings_store.save_all.call_args[0][0][
+            "electricity_price"
+        ]
+        assert elec["grid_tariff_hourly"] == winter
+        assert elec["grid_tariff_summer_hourly"] == summer
+        price_calls = [
+            c
+            for c in complete_controller.system.update_settings.call_args_list
+            if "price" in c[0][0]
+        ]
+        assert price_calls[0][0][0]["price"]["grid_tariff_summer_hourly"] == summer
+
+    def test_malformed_grid_tariff_rejected(
+        self, complete_controller: MagicMock
+    ) -> None:
+        payload = _full_wizard_payload(gridTariffHourly=[0.45] * 23)
+        resp = _client.post("/api/setup/complete", json=payload)
+        assert resp.status_code == 422
+        complete_controller.settings_store.save_all.assert_not_called()
 
     def test_price_fields_saved_without_markup_or_vat(self, complete_controller):
         """additionalCosts/taxReduction must be persisted even without markupRate/vatMultiplier."""
@@ -1621,3 +1653,27 @@ class TestSetupCompleteDemoMode:
         payload = _full_wizard_payload()  # no demoMode key
         _client.post("/api/setup/complete", json=payload)
         complete_controller.system.set_demo_mode.assert_not_called()
+
+
+class TestSetupCompleteModelInvariantsNotPersisted:
+    """The wizard's atomic save must not persist a value the settings model
+    rejects -- the same save-then-validate order as PATCH /api/settings left
+    an unstartable bess_settings.json behind (#917)."""
+
+    def test_rejected_safety_margin_is_not_persisted(
+        self, complete_controller: MagicMock, wire_real_settings_models: Callable
+    ) -> None:
+        _, home = wire_real_settings_models(complete_controller)
+        before = deepcopy(complete_controller.settings_store.data)
+
+        resp = _client.post(
+            "/api/setup/complete",
+            json=_full_wizard_payload(safetyMarginFactor=0),
+        )
+
+        assert resp.status_code == 422
+        assert "safety_margin" in resp.json()["detail"]
+        complete_controller.settings_store.save_all.assert_not_called()
+        assert complete_controller.settings_store.data == before
+        assert home.safety_margin == 1.0
+        complete_controller.system.switch_inverter_platform.assert_not_called()
