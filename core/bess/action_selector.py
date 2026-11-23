@@ -124,7 +124,7 @@ def _solar_export_bypass_is_unexecutable(
     home_consumption: float,
     battery_settings: BatterySettings,
     dt: float,
-    export_cap_kwh: float | None = None,
+    feed_in_cap_kwh: float | None = None,
 ) -> bool:
     """Is the SOLAR_EXPORT-below-max bypass (#313) one no inverter can carry
     out as commanded this period? (#630)
@@ -162,7 +162,7 @@ def _solar_export_bypass_is_unexecutable(
     gives: a cap passed in is a cap a caller can get wrong, and gating this
     candidate under a different cap than `_period_flows` prices it under is
     the reward-vs-flows divergence P4 exists to remove. One derivation per
-    period is not a cost worth reopening that seam for. `export_cap_kwh` is
+    period is not a cost worth reopening that seam for. `feed_in_cap_kwh` is
     the exception the same argument produces: it comes from `HomeSettings`,
     which this function does not receive, so it is passed and folded in --
     exactly as `_period_flows` does with it.
@@ -175,7 +175,7 @@ def _solar_export_bypass_is_unexecutable(
         _period_ac_cap_kwh(
             _effective_ac_cap_kwh(battery_settings, dt),
             home_consumption,
-            export_cap_kwh,
+            feed_in_cap_kwh,
         ),
     )
     return grid_exported <= FLOW_NOISE_FLOOR_KWH
@@ -628,7 +628,7 @@ class PeriodInputs:
     dt: float
     max_charge_power_per_period: list[float] | None = None
     import_cap_kwh: list[float | None] | None = None
-    export_cap_kwh: float | None = None
+    feed_in_cap_kwh: float | None = None
     min_grid_export_kwh: list[float] | None = None
     capabilities: PlatformCapabilities = DEFAULT_CAPABILITIES
     sell_price_floored: list[bool] | None = None
@@ -705,7 +705,7 @@ def select_action(
     # of the grid connection, so it carries no per-period variation of its
     # own. `_period_ac_cap_kwh` below is what makes its *effect* per-period,
     # by folding it against this period's home_consumption.
-    export_cap_kwh = period_inputs.export_cap_kwh
+    feed_in_cap_kwh = period_inputs.feed_in_cap_kwh
     min_grid_export_kwh = (
         period_inputs.min_grid_export_kwh[t]
         if period_inputs.min_grid_export_kwh is not None
@@ -717,7 +717,7 @@ def select_action(
     # see `_period_ac_cap_kwh`. Every clamp and clip downstream of this line
     # then enforces it with no constraint of its own.
     ac_cap_kwh = _period_ac_cap_kwh(
-        _effective_ac_cap_kwh(battery_settings, dt), home, export_cap_kwh
+        _effective_ac_cap_kwh(battery_settings, dt), home, feed_in_cap_kwh
     )
 
     # Candidates are gathered first, then filtered against the import cap
@@ -764,7 +764,7 @@ def select_action(
             sell_price=period_inputs.sell_price,
             cost_basis=cost_basis,
             import_cap_kwh=import_cap_kwh,
-            export_cap_kwh=export_cap_kwh,
+            feed_in_cap_kwh=feed_in_cap_kwh,
         )
         candidates.append(
             Candidate(
@@ -790,7 +790,7 @@ def select_action(
     # IDLE rather than SOLAR_EXPORT, since nothing then commands the hold
     # (#630).
     if not _solar_export_bypass_is_unexecutable(
-        solar, home, battery_settings, dt, export_cap_kwh
+        solar, home, battery_settings, dt, feed_in_cap_kwh
     ):
         consider(0.0, forced_next_soe=soe)
 

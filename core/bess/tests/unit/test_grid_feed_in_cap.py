@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 
 from core.bess.dp_battery_algorithm import (
-    _effective_export_cap_kwh,
+    _effective_feed_in_cap_kwh,
     _period_ac_cap_kwh,
 )
 from core.bess.settings import HomeSettings
@@ -28,38 +28,40 @@ EXPORT_LIMIT_KW = 3.0
 EXPORT_CAP_KWH = EXPORT_LIMIT_KW * 1.0  # dt = 1.0 in both scenarios below
 
 
-def test_effective_export_cap_is_off_by_default_and_scales_with_period_length() -> None:
-    assert _effective_export_cap_kwh(HomeSettings(), dt=1.0) is None
-    assert _effective_export_cap_kwh(None, dt=1.0) is None
+def test_effective_feed_in_cap_is_off_by_default_and_scales_with_period_length() -> (
+    None
+):
+    assert _effective_feed_in_cap_kwh(HomeSettings(), dt=1.0) is None
+    assert _effective_feed_in_cap_kwh(None, dt=1.0) is None
 
     home = HomeSettings(grid_export_power_limit_kw=EXPORT_LIMIT_KW)
-    assert _effective_export_cap_kwh(home, dt=1.0) == pytest.approx(3.0)
-    assert _effective_export_cap_kwh(home, dt=0.25) == pytest.approx(0.75)
+    assert _effective_feed_in_cap_kwh(home, dt=1.0) == pytest.approx(3.0)
+    assert _effective_feed_in_cap_kwh(home, dt=0.25) == pytest.approx(0.75)
 
 
-def test_effective_export_cap_ignores_power_monitoring() -> None:
+def test_effective_feed_in_cap_ignores_power_monitoring() -> None:
     """A feed-in ceiling is a property of the grid connection, not of the
     fuse-protection feature -- unlike the import cap, which is derived from the
     fuse and is off whenever monitoring is."""
     home = HomeSettings(
         grid_export_power_limit_kw=EXPORT_LIMIT_KW, power_monitoring_enabled=False
     )
-    assert _effective_export_cap_kwh(home, dt=1.0) == pytest.approx(3.0)
+    assert _effective_feed_in_cap_kwh(home, dt=1.0) == pytest.approx(3.0)
 
 
 def test_period_ac_cap_takes_the_tighter_of_the_two_ceilings() -> None:
     """`grid_exported = ac_output - home_consumption`, so an export ceiling is
-    an AC-output ceiling of `home_consumption + export_cap`. Whichever of the
+    an AC-output ceiling of `home_consumption + feed_in_cap`. Whichever of the
     two binds first is what the period runs under."""
-    assert _period_ac_cap_kwh(5.0, home_consumption=1.0, export_cap_kwh=None) == 5.0
-    assert _period_ac_cap_kwh(None, home_consumption=1.0, export_cap_kwh=None) is None
+    assert _period_ac_cap_kwh(5.0, home_consumption=1.0, feed_in_cap_kwh=None) == 5.0
+    assert _period_ac_cap_kwh(None, home_consumption=1.0, feed_in_cap_kwh=None) is None
 
     # No inverter cap: the export ceiling alone bounds AC output.
-    assert _period_ac_cap_kwh(None, home_consumption=1.0, export_cap_kwh=3.0) == 4.0
-    assert _period_ac_cap_kwh(3.5, home_consumption=1.0, export_cap_kwh=3.0) == 3.5
-    assert _period_ac_cap_kwh(9.0, home_consumption=1.0, export_cap_kwh=3.0) == 4.0
+    assert _period_ac_cap_kwh(None, home_consumption=1.0, feed_in_cap_kwh=3.0) == 4.0
+    assert _period_ac_cap_kwh(3.5, home_consumption=1.0, feed_in_cap_kwh=3.0) == 3.5
+    assert _period_ac_cap_kwh(9.0, home_consumption=1.0, feed_in_cap_kwh=3.0) == 4.0
     # A bigger house load leaves more room under the same feed-in ceiling.
-    assert _period_ac_cap_kwh(9.0, home_consumption=4.0, export_cap_kwh=3.0) == 7.0
+    assert _period_ac_cap_kwh(9.0, home_consumption=4.0, feed_in_cap_kwh=3.0) == 7.0
 
 
 def _uncapped(scenario: dict[str, Any]) -> dict[str, Any]:

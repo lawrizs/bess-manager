@@ -114,7 +114,7 @@ def _pwl_candidate_values_at(
     dt: float,
     period_max_charge: float | None,
     import_cap_kwh: float | None = None,
-    export_cap_kwh: float | None = None,
+    feed_in_cap_kwh: float | None = None,
     capabilities: PlatformCapabilities = DEFAULT_CAPABILITIES,
     min_grid_export_kwh: float | None = None,
 ) -> np.ndarray:
@@ -174,7 +174,7 @@ def _pwl_candidate_values_at(
             dt,
             period_max_charge,
             import_cap_kwh,
-            export_cap_kwh,
+            feed_in_cap_kwh,
             capabilities,
             min_grid_export_kwh,
         )
@@ -190,7 +190,7 @@ def _pwl_candidate_values_at(
                 dt,
                 period_max_charge,
                 import_cap_kwh,
-                export_cap_kwh,
+                feed_in_cap_kwh,
                 capabilities,
                 min_grid_export_kwh,
             )
@@ -209,7 +209,7 @@ def _pwl_candidate_values_block(
     dt: float,
     period_max_charge: float | None,
     import_cap_kwh: float | None = None,
-    export_cap_kwh: float | None = None,
+    feed_in_cap_kwh: float | None = None,
     capabilities: PlatformCapabilities = DEFAULT_CAPABILITIES,
     min_grid_export_kwh: float | None = None,
 ) -> np.ndarray:
@@ -231,7 +231,7 @@ def _pwl_candidate_values_block(
     ac_cap_kwh = _period_ac_cap_kwh(
         _effective_ac_cap_kwh(battery_settings, dt),
         home_consumption[t],
-        export_cap_kwh,
+        feed_in_cap_kwh,
     )
     rate_step = capabilities.discharge_rate_step_kw(battery_settings)
 
@@ -274,7 +274,7 @@ def _pwl_candidate_values_block(
         current_sell_price=sell_price[t],
         solar_production=solar_production[t],
         import_cap_kwh=import_cap_kwh,
-        export_cap_kwh=export_cap_kwh,
+        feed_in_cap_kwh=feed_in_cap_kwh,
     )
 
     # STORE feasibility: the same rule replay's _charge_candidate applies
@@ -380,7 +380,7 @@ def _pwl_candidate_values_block(
     # grid above) is what the hardware does instead, which is why dropping
     # the column cannot leave a row without a finite action.
     has_bypass = not _solar_export_bypass_is_unexecutable(
-        solar_production[t], home_consumption[t], battery_settings, dt, export_cap_kwh
+        solar_production[t], home_consumption[t], battery_settings, dt, feed_in_cap_kwh
     )
     if has_bypass:
         zeros_col = np.zeros_like(soe_col)
@@ -396,7 +396,7 @@ def _pwl_candidate_values_block(
                 current_sell_price=sell_price[t],
                 solar_production=solar_production[t],
                 import_cap_kwh=import_cap_kwh,
-                export_cap_kwh=export_cap_kwh,
+                feed_in_cap_kwh=feed_in_cap_kwh,
             )
         )
         value_bypass = reward_bypass + _pwl_eval_array(V_next, soe_col)
@@ -487,7 +487,7 @@ def _pwl_best_action_at_continuous_state(
     max_charge_power_per_period: list[float] | None,
     capabilities: PlatformCapabilities = DEFAULT_CAPABILITIES,
     import_cap_kwh: list[float | None] | None = None,
-    export_cap_kwh: float | None = None,
+    feed_in_cap_kwh: float | None = None,
     sell_price_floored: list[bool] | None = None,
     min_grid_export_kwh: list[float] | None = None,
 ) -> tuple[float, float, float, float, PeriodFlows]:
@@ -528,7 +528,7 @@ def _pwl_best_action_at_continuous_state(
             dt=dt,
             max_charge_power_per_period=max_charge_power_per_period,
             import_cap_kwh=import_cap_kwh,
-            export_cap_kwh=export_cap_kwh,
+            feed_in_cap_kwh=feed_in_cap_kwh,
             min_grid_export_kwh=min_grid_export_kwh,
             capabilities=capabilities,
             sell_price_floored=sell_price_floored,
@@ -804,7 +804,7 @@ def run_pwl_window_backward_induction(
     max_charge_power_per_period: list[float] | None = None,
     capabilities: PlatformCapabilities = DEFAULT_CAPABILITIES,
     import_cap_kwh: list[float | None] | None = None,
-    export_cap_kwh: float | None = None,
+    feed_in_cap_kwh: float | None = None,
     min_grid_export_kwh: list[float] | None = None,
 ) -> list[tuple[np.ndarray, np.ndarray]]:
     """Exact PWL backward induction over a short sub-horizon window whose end
@@ -841,7 +841,7 @@ def run_pwl_window_backward_induction(
     per window period, passed for the same reason: a window solved without it
     could value a hold where the surrounding plan must export.
 
-    `export_cap_kwh` carries the same obligation for the DSO's feed-in
+    `feed_in_cap_kwh` carries the same obligation for the DSO's feed-in
     ceiling: a window re-solved without it splices back an action exporting
     more than the connection allows, precisely where the constraint binds.
 
@@ -913,7 +913,7 @@ def run_pwl_window_backward_induction(
                 dt,
                 _pmc,
                 _cap,
-                export_cap_kwh,
+                feed_in_cap_kwh,
                 capabilities,
                 _min_export,
             )
@@ -1032,7 +1032,7 @@ def resolve_pwl_window(
     max_charge_power_per_period: list[float] | None = None,
     capabilities: PlatformCapabilities = DEFAULT_CAPABILITIES,
     import_cap_kwh: list[float | None] | None = None,
-    export_cap_kwh: float | None = None,
+    feed_in_cap_kwh: float | None = None,
     sell_price_floored: list[bool] | None = None,
     min_grid_export_kwh: list[float] | None = None,
 ) -> list[tuple[float, float, PeriodFlows]]:
@@ -1052,7 +1052,7 @@ def resolve_pwl_window(
 
     `import_cap_kwh` must be the same per-period grid-import caps the
     backward induction was run with, so the replayed actions obey the same
-    constraint the value table was built under. `export_cap_kwh` and
+    constraint the value table was built under. `feed_in_cap_kwh` and
     `min_grid_export_kwh` likewise.
 
     Returns `[(power, next_soe), ...]` for each of the window's periods.
@@ -1085,7 +1085,7 @@ def resolve_pwl_window(
             max_charge_power_per_period=max_charge_power_per_period,
             capabilities=capabilities,
             import_cap_kwh=import_cap_kwh,
-            export_cap_kwh=export_cap_kwh,
+            feed_in_cap_kwh=feed_in_cap_kwh,
             sell_price_floored=sell_price_floored,
             min_grid_export_kwh=min_grid_export_kwh,
         )

@@ -225,7 +225,7 @@ def vpp_command_to_power(
     soe: float,
     settings: BatterySettings,
     dt: float,
-    export_cap_kwh: float | None = None,
+    feed_in_cap_kwh: float | None = None,
 ) -> float | None:
     """Battery power (kW; + charge, - discharge) the inverter applies under a
     VPP command. Returns None for "battery held exactly, solar bypasses to
@@ -252,7 +252,7 @@ def vpp_command_to_power(
     # this headroom bounds battery-sourced export too -- the same clamp the
     # plan was built under, which is what keeps realized == planned.
     ac_cap_kwh = _period_ac_cap_kwh(
-        _effective_ac_cap_kwh(settings, dt), home, export_cap_kwh
+        _effective_ac_cap_kwh(settings, dt), home, feed_in_cap_kwh
     )
     ac_headroom_kwh = (
         float("inf")
@@ -426,7 +426,7 @@ def simulate_vpp(
     dt: float,
     currency: str = "SEK",
     intra_period_discharge_allowed: list[bool] | None = None,
-    export_cap_kwh: float | None = None,
+    feed_in_cap_kwh: float | None = None,
     planned_grid_imported_kwh: list[float] | None = None,
 ) -> VppSimulationResult:
     """Execute a VPP command sequence, carrying SoE forward, using the
@@ -491,7 +491,7 @@ def simulate_vpp(
         settings,
         dt,
         currency,
-        export_cap_kwh,
+        feed_in_cap_kwh,
     )
 
 
@@ -505,7 +505,7 @@ def simulate_vpp_commands(
     settings: BatterySettings,
     dt: float,
     currency: str = "SEK",
-    export_cap_kwh: float | None = None,
+    feed_in_cap_kwh: float | None = None,
 ) -> VppSimulationResult:
     """Execute an explicit command sequence, bypassing derivation.
 
@@ -525,7 +525,7 @@ def simulate_vpp_commands(
         settings,
         dt,
         currency,
-        export_cap_kwh,
+        feed_in_cap_kwh,
     )
 
 
@@ -540,7 +540,7 @@ def _simulate(
     settings: BatterySettings,
     dt: float,
     currency: str,
-    export_cap_kwh: float | None = None,
+    feed_in_cap_kwh: float | None = None,
 ) -> VppSimulationResult:
     """The one execution loop. `command_at(period, soe)` supplies each
     period's command against the SoE the run has reached, which is what lets
@@ -558,7 +558,7 @@ def _simulate(
             soe,
             settings,
             dt,
-            export_cap_kwh,
+            feed_in_cap_kwh,
         )
         if power is None:
             next_soe = soe
@@ -580,7 +580,7 @@ def _simulate(
             solar_production=solar_production[t],
             battery_settings=settings,
             dt=dt,
-            export_cap_kwh=export_cap_kwh,
+            feed_in_cap_kwh=feed_in_cap_kwh,
         )
         period_data.append(
             _build_period_data(

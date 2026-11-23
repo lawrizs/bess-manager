@@ -286,7 +286,7 @@ def _backward_pass_value(
     sell: float,
     soe: float,
     target: float | None,
-    export_cap_kwh: float | None = None,
+    feed_in_cap_kwh: float | None = None,
 ) -> float:
     """One-period V at `soe` from the named backward pass, with a zero
     continuation row so the value is exactly the best reward it admits."""
@@ -300,7 +300,7 @@ def _backward_pass_value(
             dt=DT,
             solar_production=[solar],
             initial_soe=soe,
-            export_cap_kwh=export_cap_kwh,
+            feed_in_cap_kwh=feed_in_cap_kwh,
             min_grid_export_kwh=None if target is None else [target],
         )
         return float(V[0, round((soe - settings.min_soe_kwh) / SOE_STEP_KWH)])
@@ -325,7 +325,7 @@ def _backward_pass_value(
         DT,
         None,
         None,
-        export_cap_kwh=export_cap_kwh,
+        feed_in_cap_kwh=feed_in_cap_kwh,
         capabilities=DEFAULT_CAPABILITIES,
         min_grid_export_kwh=target,
     )
@@ -340,7 +340,7 @@ def _selector_value(
     sell: float,
     soe: float,
     target: float | None,
-    export_cap_kwh: float | None = None,
+    feed_in_cap_kwh: float | None = None,
 ) -> float:
     """The selector's argmax value under the same zero continuation."""
     result = select_action(
@@ -355,7 +355,7 @@ def _selector_value(
             home_consumption=[home],
             solar_production=[solar],
             dt=DT,
-            export_cap_kwh=export_cap_kwh,
+            feed_in_cap_kwh=feed_in_cap_kwh,
             min_grid_export_kwh=None if target is None else [target],
         ),
         battery_settings=settings,
@@ -425,7 +425,7 @@ def test_backward_passes_apply_the_selectors_minimum_export_mask(
 
 
 @pytest.mark.parametrize("backward_pass", ["grid", "pwl"])
-def test_backward_passes_withhold_the_bypass_the_export_cap_makes_unexecutable(
+def test_backward_passes_withhold_the_bypass_the_feed_in_cap_makes_unexecutable(
     backward_pass: str,
 ) -> None:
     """#630's executability gate folds the DSO export cap in, the way
@@ -439,11 +439,11 @@ def test_backward_passes_withhold_the_bypass_the_export_cap_makes_unexecutable(
     settings = make_battery_settings(cycle_cost_per_kwh=0.40)
     home, solar, buy, sell = 0.1, 1.5, 1.5, 0.9
     soe = settings.min_soe_kwh
-    export_cap_kwh = FLOW_NOISE_FLOOR_KWH / 2
+    feed_in_cap_kwh = FLOW_NOISE_FLOOR_KWH / 2
 
     assert not _solar_export_bypass_is_unexecutable(solar, home, settings, DT)
     assert _solar_export_bypass_is_unexecutable(
-        solar, home, settings, DT, export_cap_kwh
+        solar, home, settings, DT, feed_in_cap_kwh
     )
 
     # Under the cap the bypass clips the surplus for free while IDLE absorbs
@@ -461,10 +461,10 @@ def test_backward_passes_withhold_the_bypass_the_export_cap_makes_unexecutable(
         buy_price=[buy],
         sell_price=[sell],
         cost_basis=0.0,
-        export_cap_kwh=export_cap_kwh,
+        feed_in_cap_kwh=feed_in_cap_kwh,
     )
     selector_value = _selector_value(
-        settings, home, solar, buy, sell, soe, None, export_cap_kwh=export_cap_kwh
+        settings, home, solar, buy, sell, soe, None, feed_in_cap_kwh=feed_in_cap_kwh
     )
     assert bypass_reward > selector_value, "fixture no longer discriminates"
 
@@ -478,7 +478,7 @@ def test_backward_passes_withhold_the_bypass_the_export_cap_makes_unexecutable(
             sell,
             soe,
             None,
-            export_cap_kwh=export_cap_kwh,
+            feed_in_cap_kwh=feed_in_cap_kwh,
         )
         == selector_value
     )

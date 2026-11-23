@@ -736,12 +736,12 @@ mechanism and is unchanged.)
   of the grid connection, present with or without live current monitoring.
   Validated `>= 0` unconditionally in `HomeSettings.__post_init__`.
 - **Derivation**: `grid_export_power_limit_kw × dt`
-  (`_effective_export_cap_kwh`), with the same `<= 0.0 → None` convention as
+  (`_effective_feed_in_cap_kwh`), with the same `<= 0.0 → None` convention as
   the other two.
 - **It is carried as a tightening of the AC output cap, not as a constraint
   of its own.** `_ac_flows` serves the home first and exports the remainder,
   so bounding `grid_exported` by the cap is exactly bounding AC output by
-  `home_consumption + export_cap`. `_period_ac_cap_kwh` takes the tighter of
+  `home_consumption + feed_in_cap`. `_period_ac_cap_kwh` takes the tighter of
   that and the inverter's own cap, and every existing clip and discharge
   clamp then enforces it unchanged — because
   `min(headroom(A), headroom(B)) == headroom(min(A, B))`. This is why the
@@ -757,7 +757,7 @@ mechanism and is unchanged.)
 - **No "constrain, don't raise" floor is needed**, unlike the import cap.
   Import has an irreducible floor (the home deficit); export does not — plain
   IDLE is feasible in every state, because with no battery flow the clip alone
-  leaves `grid_exported <= export_cap`.
+  leaves `grid_exported <= feed_in_cap`.
 - **Excluded solar is clipped, not curtailed-and-credited**: it lands in
   `clipped_solar`, the same field AC clipping uses, so `EnergyData` and every
   downstream report need no new field. A consequence worth knowing when
@@ -767,7 +767,7 @@ mechanism and is unchanged.)
   `_price_flows`' existing clipping discount already prices it that way — the
   opportunity cost of storing solar that would have been clipped anyway is
   zero. So a binding ceiling makes charging from surplus solar strictly more
-  attractive. Pinned by `core/bess/tests/unit/test_grid_export_cap.py`.
+  attractive. Pinned by `core/bess/tests/unit/test_grid_feed_in_cap.py`.
 
 **Peak-shaving window extension (#96, Option B)**: the fuse cap above is a
 horizon-wide scalar; `BatterySystemManager.peak_shaving` (a `PeakShavingSettings`
