@@ -9,7 +9,7 @@ from core.bess.dp_battery_algorithm import (
     POWER_STEP_KW,
     POWER_TOLERANCE_KW,
     _compute_reward,
-    _effective_export_cap_kwh,
+    _effective_feed_in_cap_kwh,
     _effective_import_cap_kwh,
     optimize_battery_schedule,
 )
@@ -115,7 +115,7 @@ def _reject_unsupported_import_cap(inputs: dict) -> None:
         )
 
 
-def _reject_unsupported_export_cap(inputs: dict) -> None:
+def _reject_unsupported_feed_in_cap(inputs: dict) -> None:
     """Fail loudly on a scenario whose grid-export cap this harness does not
     thread.
 
@@ -125,7 +125,7 @@ def _reject_unsupported_export_cap(inputs: dict) -> None:
     module's replay and reference solve pass no export cap at all. The delta
     that produces is an objective mismatch, not a coverage finding.
     """
-    cap = _effective_export_cap_kwh(
+    cap = _effective_feed_in_cap_kwh(
         inputs.get("home_settings"), inputs["period_duration_hours"]
     )
     if cap is not None:
@@ -570,7 +570,7 @@ def measure_scenario(scenario: dict) -> ScenarioMeasurement:
     # same NotImplementedError, but only after optimize_battery_schedule ran.
     _reject_unsupported_objective(inputs["battery_settings"])
     _reject_unsupported_import_cap(inputs)
-    _reject_unsupported_export_cap(inputs)
+    _reject_unsupported_feed_in_cap(inputs)
     diagnostics: dict = {}
     result = optimize_battery_schedule(**inputs, tie_diagnostics=diagnostics)
 

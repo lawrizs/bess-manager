@@ -7,6 +7,7 @@ code paths without needing a live Home Assistant instance.
 
 import logging
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
@@ -18,7 +19,7 @@ from core.bess.ha_api_controller import (
     HomeAssistantAPIController,
     solcast_detailed_hourly_to_quarterly,
 )
-from core.bess.runtime_failure_tracker import RuntimeFailureTracker
+from core.bess.runtime_failure_tracker import RuntimeFailure, RuntimeFailureTracker
 from core.bess.settings_store import SettingsStore
 
 
@@ -240,6 +241,79 @@ class TestServiceCallWithRetry:
                 "input_number", "set_value", entity_id="input_number.x", value=1
             )
             assert mock.call_args.kwargs["category"] == "battery_control"
+
+    @staticmethod
+    def _active_failures(ctrl: HomeAssistantAPIController) -> list[RuntimeFailure]:
+        assert ctrl.failure_tracker is not None
+        return ctrl.failure_tracker.get_active_failures()
+
+    def _fail_write(self, ctrl: HomeAssistantAPIController) -> None:
+        ctrl.max_attempts = 1
+        ctrl.session.post = _session_method_mock(  # type: ignore[method-assign]
+            "post", side_effect=requests.ConnectionError("refused")
+        )
+        with pytest.raises(requests.ConnectionError):
+            ctrl._service_call_with_retry("switch", "turn_on", entity_id="switch.x")
+
+    def test_successful_write_clears_an_earlier_failure_of_its_category(
+        self, ctrl: HomeAssistantAPIController
+    ) -> None:
+        """#875: nothing used to clear these, so one bad night left a banner
+        up until someone dismissed it by hand."""
+        self._fail_write(ctrl)
+        assert len(self._active_failures(ctrl)) == 1
+
+        ctrl.session.post = _session_method_mock(  # type: ignore[method-assign]
+            "post", return_value=_mock_response(content_type="text/plain")
+        )
+        ctrl._service_call_with_retry("switch", "turn_off", entity_id="switch.x")
+
+        assert self._active_failures(ctrl) == []
+
+    def test_successful_write_to_another_entity_leaves_the_failure(
+        self, ctrl: HomeAssistantAPIController
+    ) -> None:
+        """A healthy register must not hide one that is still failing."""
+        self._fail_write(ctrl)
+
+        ctrl.session.post = _session_method_mock(  # type: ignore[method-assign]
+            "post", return_value=_mock_response(content_type="text/plain")
+        )
+        ctrl._service_call_with_retry("switch", "turn_on", entity_id="switch.other")
+
+        assert len(self._active_failures(ctrl)) == 1
+
+    def test_successful_write_leaves_other_categories_alone(
+        self, ctrl: HomeAssistantAPIController
+    ) -> None:
+        self._fail_write(ctrl)
+
+        ctrl.session.post = _session_method_mock(  # type: ignore[method-assign]
+            "post", return_value=_mock_response(content_type="text/plain")
+        )
+        ctrl._service_call_with_retry(
+            "switch", "turn_off", category="other", entity_id="switch.x"
+        )
+
+        assert len(self._active_failures(ctrl)) == 1
+
+    def test_successful_read_does_not_clear_a_write_failure(
+        self, ctrl: HomeAssistantAPIController
+    ) -> None:
+        ctrl.service_domain = "growatt_server"
+        ctrl.max_attempts = 1
+        ctrl.session.post = _session_method_mock(  # type: ignore[method-assign]
+            "post", side_effect=requests.ConnectionError("refused")
+        )
+        with pytest.raises(requests.ConnectionError):
+            ctrl._service_call_with_retry("growatt_server", "update_time_segment")
+
+        ctrl.session.post = _session_method_mock(  # type: ignore[method-assign]
+            "post", return_value=_mock_response({"result": "ok"})
+        )
+        ctrl._service_call_with_retry("growatt_server", "read_time_segments")
+
+        assert len(self._active_failures(ctrl)) == 1
 
 
 # ── _get_raw_state / _get_sensor_value / _get_binary_state ───────────────────
@@ -1301,6 +1375,59 @@ class TestWriteSolisPeriod:
         )
 
 
+class TestSolisDischargeLimits:
+    # Command-level on purpose: these pin the HA service each limit reaches.
+    # What the limits do to the battery is asserted in
+    # test_solis_modbus_controller.py against the measured inverter model.
+    @pytest.fixture
+    def limits_ctrl(
+        self, ctrl: HomeAssistantAPIController
+    ) -> HomeAssistantAPIController:
+        ctrl.sensors = {
+            **ctrl.sensors,
+            "solis_discharge_cutoff_soc_3": "number.solis_cutoff_3",
+            "solis_discharge_current_3": "number.solis_current_3",
+        }
+        return ctrl
+
+    def test_cutoff_is_written_to_the_slot_number_entity(
+        self, limits_ctrl: HomeAssistantAPIController
+    ) -> None:
+        with patch.object(limits_ctrl, "_service_call_with_retry") as call:
+            limits_ctrl.set_solis_discharge_cutoff_soc(3, 100)
+
+        call.assert_called_once()
+        assert call.call_args.args[:2] == ("number", "set_value")
+        assert call.call_args.kwargs["entity_id"] == "number.solis_cutoff_3"
+        assert call.call_args.kwargs["value"] == 100
+
+    def test_current_is_written_to_the_slot_number_entity(
+        self, limits_ctrl: HomeAssistantAPIController
+    ) -> None:
+        with patch.object(limits_ctrl, "_service_call_with_retry") as call:
+            limits_ctrl.set_solis_discharge_current(3, 39.1)
+
+        assert call.call_args.kwargs["entity_id"] == "number.solis_current_3"
+        assert call.call_args.kwargs["value"] == 39.1
+
+    def test_unconfigured_slot_fails_loudly(
+        self, limits_ctrl: HomeAssistantAPIController
+    ) -> None:
+        with pytest.raises(ValueError):
+            limits_ctrl.set_solis_discharge_cutoff_soc(1, 100)
+
+    def test_missing_sensors_lists_every_unconfigured_limit(
+        self, limits_ctrl: HomeAssistantAPIController
+    ) -> None:
+        missing = limits_ctrl.missing_solis_discharge_limit_sensors()
+
+        assert "solis_discharge_cutoff_soc_1" in missing
+        assert "solis_discharge_current_6" in missing
+        assert "battery_voltage" in missing
+        assert "solis_discharge_cutoff_soc_3" not in missing
+        assert "solis_discharge_current_3" not in missing
+
+
 class TestGridChargeEnabled:
     def test_switch_on(self, ctrl):
         ctrl.session.get = _session_method_mock(
@@ -1373,6 +1500,23 @@ class TestGetEntityStateRaw:
         )
         result = ctrl.get_entity_state_raw("sensor.battery_soc")
         assert result["state"] == "50"
+
+    def test_optional_404_raises_without_error_log(
+        self, ctrl: Any, caplog: Any
+    ) -> None:
+        """#863: probing a disabled entity must not log an ERROR per entity."""
+        ctrl.session.get = _session_method_mock("get", return_value=_mock_404())
+        with caplog.at_level(logging.DEBUG):
+            with pytest.raises(requests.HTTPError):
+                ctrl.get_entity_state_raw("button.inv_time_7_update", optional=True)
+        assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+    def test_default_404_still_logs_error(self, ctrl: Any, caplog: Any) -> None:
+        ctrl.session.get = _session_method_mock("get", return_value=_mock_404())
+        with caplog.at_level(logging.DEBUG):
+            with pytest.raises(requests.HTTPError):
+                ctrl.get_entity_state_raw("sensor.missing")
+        assert [r for r in caplog.records if r.levelno >= logging.ERROR]
 
 
 # ── run_request helper ───────────────────────────────────────────────────────
@@ -2068,3 +2212,113 @@ class TestGridPolarityOverride:
         }
         with pytest.raises(ValueError, match="grid_power_polarity"):
             store.get_grid_power_polarity()
+
+
+# ── Real-time home load on platforms with no load register (issue #598) ──────
+#
+# huawei_solar has no household-load register outside an EMMA, so after #818
+# nothing is mapped to local_load_power on a meterless-EMMA Huawei install. The
+# five power readings it does have balance to the house load exactly as the
+# lifetime counters do, so the live reading must come from that balance rather
+# than reading as absent (which the dashboard renders as a flat 0 W).
+
+_HUAWEI_PV = "sensor.inverter_input_power"
+_HUAWEI_GRID = "sensor.power_meter_active_power"
+_HUAWEI_BATTERY = "sensor.batteries_charge_discharge_power"
+
+
+def _huawei_power_ctrl(
+    states: dict[str, str], extra_sensors: dict | None = None
+) -> HomeAssistantAPIController:
+    """Huawei-shaped controller: signed export-positive grid meter, signed
+    charge-positive battery, PV power, and no local_load_power mapping."""
+    c = HomeAssistantAPIController(
+        ha_url="http://ha.local:8123",
+        token="test-token",
+        settings_store=_settings_store(
+            {
+                "pv_power": _HUAWEI_PV,
+                "import_power": _HUAWEI_GRID,
+                "export_power": _HUAWEI_GRID,
+                "battery_charge_power": _HUAWEI_BATTERY,
+                "battery_discharge_power": _HUAWEI_BATTERY,
+                **(extra_sensors or {}),
+            }
+        ),
+        grid_power_polarity="export_positive",
+        battery_power_polarity="charge_positive",
+    )
+    c.max_attempts = 1
+    c.retry_base_delay = 0
+
+    def _get(url: str, *args: object, **kwargs: object) -> object:
+        entity_id = url.rsplit("/", 1)[-1]
+        return _mock_response({"state": states[entity_id]})
+
+    c.session.get = _session_method_mock(  # type: ignore[method-assign]
+        "get", side_effect=_get
+    )
+    return c
+
+
+class TestRealtimeLoadPowerWithoutLoadRegister:
+    def test_grid_charging_reports_the_house_load_not_the_battery_draw(self) -> None:
+        """Night grid charge: 3 kW imported, 2.6 kW into the battery, no
+        solar. The house is drawing the remaining 400 W."""
+        c = _huawei_power_ctrl(
+            {_HUAWEI_PV: "0", _HUAWEI_GRID: "-3000", _HUAWEI_BATTERY: "2600"}
+        )
+        assert c.get_local_load_power() == pytest.approx(400.0)
+
+    def test_solar_export_with_battery_discharge(self) -> None:
+        """Daytime: 4 kW solar plus 1 kW from the battery, 3.5 kW exported —
+        the house uses 1.5 kW."""
+        c = _huawei_power_ctrl(
+            {_HUAWEI_PV: "4000", _HUAWEI_GRID: "3500", _HUAWEI_BATTERY: "-1000"}
+        )
+        assert c.get_local_load_power() == pytest.approx(1500.0)
+
+    def test_mapped_load_sensor_is_read_directly(self) -> None:
+        """An EMMA install maps a real load entity; that reading wins."""
+        c = _huawei_power_ctrl(
+            {
+                _HUAWEI_PV: "0",
+                _HUAWEI_GRID: "-3000",
+                _HUAWEI_BATTERY: "2600",
+                "sensor.emma_load_power": "777",
+            },
+            extra_sensors={"local_load_power": "sensor.emma_load_power"},
+        )
+        assert c.get_local_load_power() == 777.0
+
+    def test_unreadable_input_reports_no_load_and_names_it(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Dropping a term would report load plus that flow (the #528 defect),
+        so a missing input means no value — and the log says which one."""
+        c = _huawei_power_ctrl(
+            {_HUAWEI_PV: "0", _HUAWEI_GRID: "unavailable", _HUAWEI_BATTERY: "2600"}
+        )
+        with caplog.at_level(logging.WARNING):
+            assert c.get_local_load_power() is None
+        assert "import_power" in caplog.text
+
+    def test_small_negative_from_read_skew_reads_as_zero(self) -> None:
+        """The five entities are read one after another, so a near-idle house
+        can balance a few watts below zero. That is sampling skew, not a fault."""
+        c = _huawei_power_ctrl(
+            {_HUAWEI_PV: "0", _HUAWEI_GRID: "-2950", _HUAWEI_BATTERY: "3000"}
+        )
+        assert c.get_local_load_power() == 0.0
+
+    def test_large_negative_balance_reports_no_load(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A deficit far beyond read skew means the inputs disagree (e.g. a
+        wrong sign convention); a plausible number would hide that."""
+        c = _huawei_power_ctrl(
+            {_HUAWEI_PV: "0", _HUAWEI_GRID: "-1000", _HUAWEI_BATTERY: "3000"}
+        )
+        with caplog.at_level(logging.WARNING):
+            assert c.get_local_load_power() is None
+        assert "negative" in caplog.text

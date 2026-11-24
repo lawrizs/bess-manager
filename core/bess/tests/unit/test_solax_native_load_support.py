@@ -21,6 +21,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from core.bess.execution_model import LOAD_SUPPORT_CEILING, LOAD_SUPPORT_UNMODELLED
 from core.bess.settings import BatterySettings
 from core.bess.solax_controller import SolaxController
 
@@ -208,10 +209,10 @@ class TestPlanningCapabilityFollowsTheToggle:
     def test_exact_cover_is_declared_only_with_native_load_support(
         self, controller: SolaxController
     ) -> None:
-        assert controller.load_support_delivers_exact_cover is False
+        assert controller.load_support_delivery == LOAD_SUPPORT_UNMODELLED
 
         controller.battery_settings.solax_native_load_support_enabled = True
-        assert controller.load_support_delivers_exact_cover is True
+        assert controller.load_support_delivery == LOAD_SUPPORT_CEILING
 
     def test_rate_semantics_are_unaffected(self, controller: SolaxController) -> None:
         """`discharge_rate_is_load_following` answers a different question --

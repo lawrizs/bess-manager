@@ -55,9 +55,18 @@ step at or above the residual delivers the residual exactly — the plan is
 the *delivery*, the command is on the lattice. It is gated so it always
 classifies as LOAD_SUPPORT and so a covering ceiling actually exists on
 the platform (`_residual_cover_p` in `action_selector.py`, and
-`load_support_delivers_exact_cover` in `execution_model.py` — the
-candidate is withdrawn on hardware where a discharge number is a forced
-power rather than a ceiling, #580).
+`load_support_delivery` in `execution_model.py` — the candidate is
+withdrawn on hardware where a discharge number is a forced power rather
+than a ceiling, #580).
+
+On Solis (`load_support_delivery = whole_load`, #884) LOAD_SUPPORT is the
+inverter's Self Use, which covers the *whole* deficit up to the battery's
+maximum discharge power and cannot cover less. There the cover candidate
+is that whole cover, and every smaller discharge in a deficit period is
+excluded from all passes (`_discharge_is_partial_cover`): a Solis period
+either covers the house completely, holds (IDLE), or exports. A battery too
+empty to cover a whole period is planned to hold rather than drain its last
+fraction of a period.
 
 Without it a period whose net load falls between two lattice steps has no
 action that covers the house: the step below under-covers and imports the
@@ -684,17 +693,29 @@ configured.
   and instead plans against the balanced-load assumption. Off (`None`) when
   `power_monitoring_enabled` is False, matching the AC cap's own
   `<= 0.0 → None` convention.
-- **Runtime monitor mechanics (#816)**: `HomePowerMonitor` runs every minute.
-  The phase-current sensors are grid-side meters, so while the battery
-  grid-charges they read house load *plus* the battery's own draw; the monitor
-  subtracts `battery_charge_power / phase_count` from each phase (clamped at
-  zero) before computing headroom, otherwise it sees its own charging as house
-  load and oscillates 0 %/100 %. Whether a period is fuse-checked comes from
-  the plan's `grid_charge` for that period, not from the inverter's grid-charge
-  switch, which lags a few seconds at a period boundary. The headroom is
-  converted to a rate with `max_charge_power_kw`, so that setting must equal
-  what the inverter really draws at 100 % — the monitor cannot correct a
-  rating that is set too low.
+- **Planning-only platforms (#901)**: the backstop needs per-period
+  charge-rate control (`realtime_fuse_guard_supported`). On Growatt VPP, SPH,
+  SolaX native, Huawei and Solis no monitor runs, so this cap is the only fuse
+  protection. It plans against *forecast* load, so an unforecast load (an EV,
+  a sauna) can push real import past the fuse. `safety_margin` (default 1.0)
+  is the user's only headroom there; ~0.7 is the advice. The Fuse Protection
+  card in Settings warns about it; System Health reports it as `OK` with a
+  "Planning-only" note, not `WARNING`, so it raises no dashboard banner (#911).
+- **Runtime monitor mechanics (#816, #877)**: `HomePowerMonitor` runs every
+  minute. The phase-current sensors are grid-side meters, so while the battery
+  grid-charges they read house load *plus* the battery's own draw. The monitor
+  therefore moves the rate it last wrote by the headroom left on the most
+  loaded phase, clamped to 0 and the period's target. It does not read the
+  battery power sensor: on Growatt cloud that sensor updates every 5 minutes,
+  and subtracting a stale value from a live meter made the rate alternate
+  (#877). Whether a period is fuse-checked comes from the plan's `grid_charge`
+  for that period, not from the inverter's grid-charge switch, which lags a few
+  seconds at a period boundary. The headroom is converted to a rate step with
+  `max_charge_power_kw`, so a wrong rating only changes the step size: the rate
+  still settles provided the real draw is under twice the rating and the
+  inverter responds within one tick (measured on Growatt cloud; unverified
+  elsewhere). The loop is reactive, so a charge start or a house-load jump can
+  overshoot for one tick.
 - **Total import, not charging-only**: the cap bounds `grid_imported` (house
   load + battery grid-charging) jointly, not just the charging component —
   `HomePowerMonitor` only throttles charging today because that is the only
@@ -715,18 +736,31 @@ configured.
   (`HomeSettings.__post_init__` raises if `power_monitoring_enabled` is set
   with non-positive `max_fuse_current`/`voltage`/`safety_margin`), never a
   silent no-op inside the DP — matches `BatterySettings.__post_init__`'s
-  existing validation pattern for `inverter_max_ac_power_kw`.
+  existing validation pattern for `inverter_max_ac_power_kw`. The Settings
+  PATCH and wizard save paths run these invariants *before* persisting and
+  reject with 422, so a refused value never reaches `bess_settings.json`
+  (where it would fail every later startup, #917).
+- **Export is capped too (#910)**: a fuse trips on current in either
+  direction, so the same per-period limit bounds `grid_exported` (battery
+  plus solar export), via `period_export_caps_kwh`. It is filtered right
+  after the import cap, before the minimum export, with the same "constrain,
+  never raise" floor: a solar surplus a full battery cannot absorb still
+  exports. Peak-shaving and Power Down session caps stay import-only. Every
+  discharge candidate is a lattice step, so the written rate delivers exactly
+  the capped plan and nothing rounds it over the fuse.
 - **Out of scope**: any change to `HomePowerMonitor`'s own runtime behavior —
   it remains the real-time safety net; this constraint just makes the *plan*
-  agree with it. Export-side/feed-in capacity limits were out of scope for
-  #429 too, as a different regulatory concept; they are now modelled
+  agree with it. Regulatory feed-in limits (a grid operator's export ceiling
+  below the fuse) were out of scope for #429 and #910; they are modelled
   separately — see the next section.
 
 ### The grid export (feed-in) cap
 
 `HomeSettings.grid_export_power_limit_kw` (default `0.0` = unconstrained) is
 the DSO's feed-in ceiling: the most power the connection is allowed to accept.
-It is the third member of the cap family, and it is **planning-only** — the
+It is a separate constraint from the fuse's export cap (#910) above — named
+`feed_in_cap_kwh` in the optimizer to keep the two apart — and it is
+**planning-only** — the
 DP never schedules export above it, but nothing new is written to hardware.
 (#269's binary export-limit actuation is a separate, price-triggered
 mechanism and is unchanged.)
@@ -736,12 +770,12 @@ mechanism and is unchanged.)
   of the grid connection, present with or without live current monitoring.
   Validated `>= 0` unconditionally in `HomeSettings.__post_init__`.
 - **Derivation**: `grid_export_power_limit_kw × dt`
-  (`_effective_export_cap_kwh`), with the same `<= 0.0 → None` convention as
+  (`_effective_feed_in_cap_kwh`), with the same `<= 0.0 → None` convention as
   the other two.
 - **It is carried as a tightening of the AC output cap, not as a constraint
   of its own.** `_ac_flows` serves the home first and exports the remainder,
   so bounding `grid_exported` by the cap is exactly bounding AC output by
-  `home_consumption + export_cap`. `_period_ac_cap_kwh` takes the tighter of
+  `home_consumption + feed_in_cap`. `_period_ac_cap_kwh` takes the tighter of
   that and the inverter's own cap, and every existing clip and discharge
   clamp then enforces it unchanged — because
   `min(headroom(A), headroom(B)) == headroom(min(A, B))`. This is why the
@@ -757,7 +791,7 @@ mechanism and is unchanged.)
 - **No "constrain, don't raise" floor is needed**, unlike the import cap.
   Import has an irreducible floor (the home deficit); export does not — plain
   IDLE is feasible in every state, because with no battery flow the clip alone
-  leaves `grid_exported <= export_cap`.
+  leaves `grid_exported <= feed_in_cap`.
 - **Excluded solar is clipped, not curtailed-and-credited**: it lands in
   `clipped_solar`, the same field AC clipping uses, so `EnergyData` and every
   downstream report need no new field. A consequence worth knowing when
@@ -767,7 +801,7 @@ mechanism and is unchanged.)
   `_price_flows`' existing clipping discount already prices it that way — the
   opportunity cost of storing solar that would have been clipped anyway is
   zero. So a binding ceiling makes charging from surplus solar strictly more
-  attractive. Pinned by `core/bess/tests/unit/test_grid_export_cap.py`.
+  attractive. Pinned by `core/bess/tests/unit/test_grid_feed_in_cap.py`.
 
 **Peak-shaving window extension (#96, Option B)**: the fuse cap above is a
 horizon-wide scalar; `BatterySystemManager.peak_shaving` (a `PeakShavingSettings`
@@ -890,17 +924,31 @@ doesn't match the schedule:
 
 The optimizer works with buy and sell prices derived from spot prices:
 
-    buy_price  = (spot + markup) * VAT_multiplier + additional_costs + grid_fee
+    buy_price  = (spot + markup) * VAT_multiplier + additional_costs + grid_fee + grid_tariff[hour]
     sell_price = spot + export_compensation
 
-`grid_fee` is the optional time-of-use distribution fee (`core/bess/grid_fee.py`),
-zero unless `price.grid_fee_enabled` is set. It varies per period, so it is the
-one buy-price term that depends on *when* the period is, not just on the spot
-price — which is why `_calculate_buy_price` takes the period's wall clock. Its
-rates are entered VAT-inclusive and stack on top of `additional_costs`.
+`grid_fee` is the fork's optional time-of-use distribution fee
+(`core/bess/grid_fee.py`), zero unless `price.grid_fee_enabled` is set. It
+follows the fixed Lithuanian ESO zone schedule (weekday/weekend aware), so it
+depends on *when* the period is, not just on the spot price — which is why
+`_calculate_buy_price` takes the period's wall clock. Its rates are entered
+VAT-inclusive and stack on top of `additional_costs`.
 
-For Octopus Energy (UK), prices are already final — no markup/VAT applied, and
-no grid fee either.
+`grid_tariff[hour]` is the optional time-of-day grid transport fee (#861,
+`electricity_price.grid_tariff_hourly`): 24 VAT-inclusive values indexed by
+the period's local wall-clock hour (DST days included). If
+`grid_tariff_summer_hourly` is also set it replaces the year-round profile in
+April–September. Empty profile = 0 for every hour. It is a buy-side fee only,
+so it widens the buy/sell spread in peak hours — a reason the optimizer may
+discharge at an hour that is cheap on spot but expensive to import.
+
+For Octopus Energy (UK), prices are already final — no markup/VAT/grid fee/tariff applied.
+
+`spot` is VAT-exclusive. A source that publishes VAT-inclusive prices (the
+Nordpool HACS sensor) is divided by the same `VAT_multiplier` before either
+formula, so one setting both strips and re-adds VAT (#903). Set it to the real
+rate even for a VAT-inclusive sensor: buy is then unchanged, and sell is priced
+on the VAT-exclusive spot. With 1.0, sell is priced on the VAT-inclusive spot.
 
 For when a discharge is worthwhile, see **The Governing Economic Law** above —
 gross `sell_price` vs `cycle_cost` is *not* the test; marginal value vs the
@@ -978,7 +1026,11 @@ If expected savings DROP between snapshots, it means something changed:
    column vs schedule predictions.
 
 4. **Prices changed between runs** — updated price data shifted the
-   economics.  Check: logs for price fetch events.
+   economics.  The price refresh job re-fetches today and tomorrow every 15
+   min even when cached, so a source that replaces a complete day (a
+   forecast sensor swapping in confirmed Nordpool prices, a market
+   correction) reaches the next optimization (#902).  Check: logs for price
+   fetch events.
 
 **NEVER say savings "naturally decay" or "diminish over time."** A drop
 is always caused by a specific, identifiable change.
@@ -1161,6 +1213,31 @@ Cost baselines:
 - **grid_only_cost**: Cost if no solar or battery existed (all consumption from grid)
 - **solar_only_cost**: Cost with solar but no battery optimization
 - **hourly_cost** (aka optimized cost): Actual cost with full optimization
+
+
+## Where Each Number Comes From
+
+Check this before saying a displayed value is "measured" or "planned".
+
+| Source | What it holds | What an elapsed slot returns |
+|---|---|---|
+| `ScheduleStore` | Optimizer plans only, always `data_source="predicted"`. Each run covers its own slot onwards. Only intents survive a restart. | The newest run covering that slot. Normally that is the run that started in it: measured start SOE + that run's planned change. If that run failed, it is an earlier forecast. After a restart there may be nothing. |
+| `HistoricalDataStore` | Measured periods, `data_source="actual"`. | The measured SOE and energy flows, if collected. |
+| Daily view (`/api/dashboard`) | Merged. | Measured where collected, otherwise the plan or a placeholder. The current and future slots are always plan. |
+| `/api/inverter/schedule` (Schedule Overview) | SOC, action and planned load read `ScheduleStore`. Today's intent comes from the inverter controller's `strategic_intents`, and grid charge and rates derive from that intent. The Solar and Grid columns sum each row's own `solar_to_battery` and `grid_to_battery`. | Solar and Grid are measured once the slot is collected. Everything else is a plan value, even on elapsed rows. |
+
+Two consequences when a plan value exists:
+
+- **Adjacent elapsed plan values come from different runs.** Their difference
+  includes the previous slot's plan-vs-reality miss, so it is not energy that
+  moved in the later slot (#866).
+- **A plan can look measured.** A plan of "do nothing" from a measured start
+  equals the measurement, so matching a sensor value doesn't show where it came
+  from.
+
+Measured SOC can also arrive in whole percent, which was 0.15 kWh steps on a
+15 kWh solax_modbus Growatt system. Treat a change of one step as sensor
+resolution and use energy flows for amounts that small.
 
 
 ## Evidence-Based Analysis

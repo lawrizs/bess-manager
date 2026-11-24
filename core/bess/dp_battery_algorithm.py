@@ -211,12 +211,18 @@ def _effective_import_cap_kwh(
     runtime -- on a fully unloaded 3-phase house it authorizes the battery up
     to its full `max_charge_power_w` (not a single phase's worth), since
     `available_pct` is computed relative to `max_charge_power_w / phase_count`
-    per phase. `HomePowerMonitor` remains the real-time backstop against
-    unbalanced loads (it measures actual per-phase current and throttles
-    battery charging against the single worst-loaded phase, commit 37201cb9,
-    #11); the DP has no per-phase forecast to reproduce that live check, so it
-    caps against the balanced-load assumption instead of the unbalanced
-    worst case.
+    per phase. Where the platform supports it, `HomePowerMonitor` is the
+    real-time backstop against unbalanced loads (it measures actual per-phase
+    current and throttles battery charging against the single worst-loaded
+    phase, commit 37201cb9, #11); the DP has no per-phase forecast to
+    reproduce that live check, so it caps against the balanced-load
+    assumption instead of the unbalanced worst case.
+
+    The backstop exists only when `realtime_fuse_guard_supported` holds
+    (a per-period charge rate to throttle). On Growatt VPP, SPH, SolaX, Huawei
+    and Solis it does not, and this cap -- against *forecast* load -- is the
+    only fuse protection; `safety_margin` is then the user's sole headroom for
+    load the forecast misses (#901).
     """
     if home_settings is None or not home_settings.power_monitoring_enabled:
         return None
@@ -245,7 +251,7 @@ def _combine_import_caps(a: float | None, b: float | None) -> float | None:
     return min(a, b)
 
 
-def _effective_export_cap_kwh(
+def _effective_feed_in_cap_kwh(
     home_settings: HomeSettings | None, dt: float
 ) -> float | None:
     """Per-period grid-export energy cap (kWh) from the DSO's feed-in limit,
@@ -264,15 +270,15 @@ def _effective_export_cap_kwh(
 def _period_ac_cap_kwh(
     ac_cap_kwh: float | None,
     home_consumption: float,
-    export_cap_kwh: float | None,
+    feed_in_cap_kwh: float | None,
 ) -> float | None:
     """Fold the grid-export cap into the inverter's AC-output cap for one
     period -- the single definition every path consumes.
 
     An export ceiling is an AC-output ceiling in disguise. `_ac_flows` serves
     the home first and exports the remainder, so bounding `grid_exported` by
-    `export_cap_kwh` is exactly bounding AC output by `home_consumption +
-    export_cap_kwh`. Expressing it that way means the export cap needs no
+    `feed_in_cap_kwh` is exactly bounding AC output by `home_consumption +
+    feed_in_cap_kwh`. Expressing it that way means the export cap needs no
     constraint of its own anywhere: the existing solar clip inside `_ac_flows`
     and the existing `max(0, cap - min(solar, cap))` discharge headroom every
     candidate site already computes both tighten automatically, because
@@ -287,9 +293,9 @@ def _period_ac_cap_kwh(
 
     Unlike the AC cap this is period-dependent, since `home_consumption` is.
     """
-    if export_cap_kwh is None:
+    if feed_in_cap_kwh is None:
         return ac_cap_kwh
-    export_bound = home_consumption + export_cap_kwh
+    export_bound = home_consumption + feed_in_cap_kwh
     if ac_cap_kwh is None:
         return export_bound
     return min(ac_cap_kwh, export_bound)
@@ -337,6 +343,22 @@ def period_import_caps_kwh(
     if fuse_import_cap_kwh is not None:
         return [fuse_import_cap_kwh] * horizon
     return None
+
+
+def period_export_caps_kwh(
+    home_settings: HomeSettings | None, horizon: int, dt: float
+) -> list[float | None] | None:
+    """Per-period grid-export caps (kWh), or None when fuse protection is off.
+
+    A fuse trips on current in either direction, so the fuse-derived limit
+    that bounds import (#429) bounds export too (#910) -- same derivation,
+    from `_effective_import_cap_kwh`, so the two cannot drift. Only the fuse
+    applies here: peak-shaving and Power Down session caps limit import alone.
+    """
+    fuse_cap_kwh = _effective_import_cap_kwh(home_settings, dt)
+    if fuse_cap_kwh is None:
+        return None
+    return [fuse_cap_kwh] * horizon
 
 
 def _ac_flows(
@@ -430,7 +452,7 @@ def _period_flows(
     battery_settings: BatterySettings,
     dt: float,
     import_cap_kwh: float | None = None,
-    export_cap_kwh: float | None = None,
+    feed_in_cap_kwh: float | None = None,
 ) -> PeriodFlows:
     """Derive one candidate action's complete flow set -- the only place a
     planned period's *reported and priced* flows are computed.
@@ -463,13 +485,13 @@ def _period_flows(
     passed `_effective_ac_cap_kwh(battery_settings, dt)` anyway, so there was
     nothing to express and something to get wrong.
 
-    `export_cap_kwh` is still a parameter for the same reason `import_cap_kwh`
+    `feed_in_cap_kwh` is still a parameter for the same reason `import_cap_kwh`
     is: it comes from `HomeSettings`, which this function does not receive.
     It is folded into the AC cap here rather than applied separately -- see
     `_period_ac_cap_kwh`.
     """
     ac_cap_kwh = _period_ac_cap_kwh(
-        _effective_ac_cap_kwh(battery_settings, dt), home_consumption, export_cap_kwh
+        _effective_ac_cap_kwh(battery_settings, dt), home_consumption, feed_in_cap_kwh
     )
 
     if power > POWER_TOLERANCE_KW:  # STORE disposition (+ optional grid charge)
@@ -749,7 +771,7 @@ def _compute_reward_grid(
     current_sell_price: float,
     solar_production: float,
     import_cap_kwh: float | None = None,
-    export_cap_kwh: float | None = None,
+    feed_in_cap_kwh: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Vectorized form of `_compute_reward`'s reward calculation.
 
@@ -766,7 +788,7 @@ def _compute_reward_grid(
     eff_charge = battery_settings.efficiency_charge
     cycle_cost = battery_settings.cycle_cost_per_kwh
     ac_cap_kwh = _period_ac_cap_kwh(
-        _effective_ac_cap_kwh(battery_settings, dt), home_consumption, export_cap_kwh
+        _effective_ac_cap_kwh(battery_settings, dt), home_consumption, feed_in_cap_kwh
     )
 
     is_charge = power > POWER_TOLERANCE_KW
@@ -881,7 +903,7 @@ def _compute_reward(
     solar_production: float,
     cost_basis: float,
     import_cap_kwh: float | None = None,
-    export_cap_kwh: float | None = None,
+    feed_in_cap_kwh: float | None = None,
 ) -> tuple[float, float, PeriodFlows]:
     """Hot-path reward computation — prices the period's `PeriodFlows` record.
 
@@ -917,7 +939,7 @@ def _compute_reward(
         battery_settings=battery_settings,
         dt=dt,
         import_cap_kwh=import_cap_kwh,
-        export_cap_kwh=export_cap_kwh,
+        feed_in_cap_kwh=feed_in_cap_kwh,
     )
     reward, new_cost_basis = _price_flows(
         flows=flows,
@@ -932,7 +954,7 @@ def _compute_reward(
         sell_price=sell_price,
         solar_production=solar_production,
         cost_basis=cost_basis,
-        export_cap_kwh=export_cap_kwh,
+        feed_in_cap_kwh=feed_in_cap_kwh,
     )
     return reward, new_cost_basis, flows
 
@@ -950,7 +972,7 @@ def _price_flows(
     sell_price: list[float],
     solar_production: float,
     cost_basis: float,
-    export_cap_kwh: float | None = None,
+    feed_in_cap_kwh: float | None = None,
 ) -> tuple[float, float]:
     """Price an already-derived `PeriodFlows` record: returns
     `(reward, new_cost_basis)`.
@@ -967,7 +989,7 @@ def _price_flows(
     applied inside `_period_flows`. Re-applying it here could only
     disagree.
 
-    It DOES take `export_cap_kwh`, and the asymmetry is load-bearing. The two
+    It DOES take `feed_in_cap_kwh`, and the asymmetry is load-bearing. The two
     solar-opportunity-cost branches below do not read the flow record -- they
     re-derive a counterfactual export through `_ac_flows`, so they need the
     same cap `_period_flows` ran under. Omitting it would price the
@@ -978,7 +1000,7 @@ def _price_flows(
     current_buy_price = buy_price[period]
     current_sell_price = sell_price[period]
     ac_cap_kwh = _period_ac_cap_kwh(
-        _effective_ac_cap_kwh(battery_settings, dt), home_consumption, export_cap_kwh
+        _effective_ac_cap_kwh(battery_settings, dt), home_consumption, feed_in_cap_kwh
     )
 
     grid_imported = flows.grid_imported
@@ -1370,9 +1392,10 @@ def _run_dynamic_programming(
     currency: str = "SEK",
     max_charge_power_per_period: list[float] | None = None,
     import_cap_kwh: list[float | None] | None = None,
-    export_cap_kwh: float | None = None,
+    feed_in_cap_kwh: float | None = None,
     capabilities: PlatformCapabilities = DEFAULT_CAPABILITIES,
     min_grid_export_kwh: list[float] | None = None,
+    export_cap_kwh: list[float | None] | None = None,
 ) -> np.ndarray:
     """
     Run backward induction DP to compute optimal battery control policy.
@@ -1386,10 +1409,11 @@ def _run_dynamic_programming(
     sunrise/sunset crossover (#466) and extended to every such period by
     Phase 4b (#352).
 
-    `import_cap_kwh` and `min_grid_export_kwh`, when given, hold one entry per
-    period. Both are masked per state exactly as `select_action` filters its
-    candidates -- import cap first, then minimum export -- so V values only
-    policies the forward replay can execute (P1).
+    `import_cap_kwh`, `export_cap_kwh` and `min_grid_export_kwh`, when given,
+    hold one entry per period. All three are masked per state exactly as
+    `select_action` filters its candidates -- import cap, then export cap,
+    then minimum export -- so V values only policies the forward replay can
+    execute (P1).
 
     Also considers, at every state, a distinct SOLAR_EXPORT-below-max
     candidate (#313) -- battery SOE held exactly unchanged (no passive
@@ -1412,6 +1436,7 @@ def _run_dynamic_programming(
     # file.
     from core.bess.action_selector import (
         _battery_to_grid_cap_kwh,
+        _discharge_is_partial_cover,
         _discharge_is_unexecutable,
         _residual_cover_p,
         _residual_load_kwh,
@@ -1481,7 +1506,7 @@ def _run_dynamic_programming(
         # Folding the export cap in makes it period-dependent (it contains
         # home_consumption), so unlike the bare AC cap it cannot be hoisted.
         ac_cap_kwh = _period_ac_cap_kwh(
-            inverter_ac_cap_kwh, home_consumption[t], export_cap_kwh
+            inverter_ac_cap_kwh, home_consumption[t], feed_in_cap_kwh
         )
         period_max_charge = (
             max_charge_power_per_period[t]
@@ -1489,6 +1514,7 @@ def _run_dynamic_programming(
             else None
         )
         period_import_cap = import_cap_kwh[t] if import_cap_kwh is not None else None
+        period_export_cap = export_cap_kwh[t] if export_cap_kwh is not None else None
         period_min_export = (
             min_grid_export_kwh[t] if min_grid_export_kwh is not None else None
         )
@@ -1530,6 +1556,18 @@ def _run_dynamic_programming(
         # finer percent lattice really has than excluding it. Measured on all
         # 33 fixtures (2026-08-09): masking here helps 7 and hurts 10, net
         # -0.004 SEK -- approximation noise, not a real bug either way.
+        #
+        # Partial load covers ARE masked (#884): on whole-load hardware they
+        # are a whole band with no command behind it, not a proxy for one, and
+        # the whole cover the replay offers instead is the cover column below.
+        feasible &= ~is_discharge | ~_discharge_is_partial_cover(
+            np.abs(power_row),
+            home_consumption[t],
+            solar_production[t],
+            dt,
+            capabilities,
+            battery_settings,
+        )
         next_soe = _state_transition_grid(
             soe_col,
             power_row,
@@ -1553,7 +1591,7 @@ def _run_dynamic_programming(
             current_sell_price=sell_price[t],
             solar_production=solar_production[t],
             import_cap_kwh=period_import_cap,
-            export_cap_kwh=export_cap_kwh,
+            feed_in_cap_kwh=feed_in_cap_kwh,
         )
 
         effective_import_cap = None
@@ -1609,7 +1647,7 @@ def _run_dynamic_programming(
             home_consumption[t],
             battery_settings,
             dt,
-            export_cap_kwh,
+            feed_in_cap_kwh,
         ):
             zeros_col = np.zeros_like(soe_col)
             reward_bypass, grid_imported_bypass, grid_exported_bypass = (
@@ -1624,7 +1662,7 @@ def _run_dynamic_programming(
                     current_sell_price=sell_price[t],
                     solar_production=solar_production[t],
                     import_cap_kwh=period_import_cap,
-                    export_cap_kwh=export_cap_kwh,
+                    feed_in_cap_kwh=feed_in_cap_kwh,
                 )
             )
             value_bypass = reward_bypass.reshape(-1) + V[t + 1][np.arange(n_states)]
@@ -1681,7 +1719,7 @@ def _run_dynamic_programming(
                     current_sell_price=sell_price[t],
                     solar_production=solar_production[t],
                     import_cap_kwh=period_import_cap,
-                    export_cap_kwh=export_cap_kwh,
+                    feed_in_cap_kwh=feed_in_cap_kwh,
                 )
             )
             if effective_import_cap is not None:
@@ -1698,8 +1736,33 @@ def _run_dynamic_programming(
                 (value_cover, cover_feasible, grid_exported_cover.reshape(-1))
             )
 
+        if period_export_cap is not None:
+            # Export cap (#910), "constrain, don't raise", after the import cap
+            # and before the minimum export -- the same filter in the same
+            # order as `select_action`. Its floor is the least export across
+            # every column, since the selector measures it over the bypass and
+            # residual-cover candidates too.
+            floor_grid_exported = np.min(
+                np.where(feasible, grid_exported, np.inf), axis=1
+            )
+            for _column_value, column_feasible, column_exported in extra_columns:
+                floor_grid_exported = np.minimum(
+                    floor_grid_exported,
+                    np.where(column_feasible, column_exported, np.inf),
+                )
+            effective_export_cap = np.maximum(period_export_cap, floor_grid_exported)
+            feasible &= grid_exported <= effective_export_cap.reshape(-1, 1) + 1e-9
+            extra_columns = [
+                (
+                    column_value,
+                    column_feasible & (column_exported <= effective_export_cap + 1e-9),
+                    column_exported,
+                )
+                for column_value, column_feasible, column_exported in extra_columns
+            ]
+
         if period_min_export is not None:
-            # Minimum export, "constrain, don't raise", AFTER the import cap --
+            # Minimum export, "constrain, don't raise", AFTER the fuse caps --
             # the same filter in the same order as `select_action`, which
             # states why. The achievable export is taken over every column,
             # since the bypass is often the only action that exports at all.
@@ -1887,9 +1950,10 @@ def _best_action_at_continuous_state(
     max_charge_power_per_period: list[float] | None,
     capabilities: PlatformCapabilities = DEFAULT_CAPABILITIES,
     import_cap_kwh: list[float | None] | None = None,
-    export_cap_kwh: float | None = None,
+    feed_in_cap_kwh: float | None = None,
     sell_price_floored: list[bool] | None = None,
     min_grid_export_kwh: list[float] | None = None,
+    export_cap_kwh: list[float | None] | None = None,
 ) -> tuple[float, float, float, float, PeriodFlows, float, float]:
     """The grid DP's forward replay: `action_selector.select_action` with the
     continuation value read off the already-known V[t+1, :] row, linearly
@@ -1938,6 +2002,7 @@ def _best_action_at_continuous_state(
             dt=dt,
             max_charge_power_per_period=max_charge_power_per_period,
             import_cap_kwh=import_cap_kwh,
+            feed_in_cap_kwh=feed_in_cap_kwh,
             export_cap_kwh=export_cap_kwh,
             min_grid_export_kwh=min_grid_export_kwh,
             capabilities=capabilities,
@@ -1966,7 +2031,7 @@ def _create_idle_schedule(
     battery_settings: BatterySettings,
     dt: float,
     currency: str,
-    export_cap_kwh: float | None = None,
+    feed_in_cap_kwh: float | None = None,
 ) -> OptimizationResult:
     """
     Create an all-IDLE schedule where battery passively charges from excess solar.
@@ -2014,7 +2079,7 @@ def _create_idle_schedule(
             solar_production=solar_production[t],
             battery_settings=battery_settings,
             dt=dt,
-            export_cap_kwh=export_cap_kwh,
+            feed_in_cap_kwh=feed_in_cap_kwh,
         )
         # Cost basis only. The reward is discarded: this schedule's cost is
         # summed from the reported PeriodData below, exactly as before, and
@@ -2032,7 +2097,7 @@ def _create_idle_schedule(
             sell_price=sell_price,
             solar_production=solar_production[t],
             cost_basis=current_cost_basis,
-            export_cap_kwh=export_cap_kwh,
+            feed_in_cap_kwh=feed_in_cap_kwh,
         )
 
         period_data = _build_period_data(
@@ -2119,7 +2184,7 @@ def _replay_accounting_pass(
     dt: float,
     currency: str,
     export_curtailment_active: bool = False,
-    export_cap_kwh: float | None = None,
+    feed_in_cap_kwh: float | None = None,
 ) -> tuple[list[PeriodData], float]:
     """Rebuild PeriodData (and the reward-objective cost) for a given
     (action, SOE, flows) trajectory.
@@ -2140,7 +2205,7 @@ def _replay_accounting_pass(
     different cap than the solve ran under would otherwise have silently
     priced a period the plan never contained.
 
-    `export_cap_kwh` is the exception, and for the same reason `_price_flows`
+    `feed_in_cap_kwh` is the exception, and for the same reason `_price_flows`
     takes it: pricing (not just physics) reads that cap, in the two
     solar-opportunity-cost counterfactuals. Withholding it here would price
     the spliced trajectory against an uncapped baseline.
@@ -2173,7 +2238,7 @@ def _replay_accounting_pass(
             sell_price=reward_sell_price,
             solar_production=solar_production[t],
             cost_basis=cost_basis,
-            export_cap_kwh=export_cap_kwh,
+            feed_in_cap_kwh=feed_in_cap_kwh,
         )
 
         period_data = _build_period_data(
@@ -2345,7 +2410,8 @@ def optimize_battery_schedule(
     # Stays scalar: a feed-in ceiling is constant across the horizon, so it
     # needs no per-period list. `_period_ac_cap_kwh` makes its effect
     # per-period by folding it against each period's home_consumption.
-    export_cap_kwh = _effective_export_cap_kwh(home_settings, dt)
+    feed_in_cap_kwh = _effective_feed_in_cap_kwh(home_settings, dt)
+    export_cap_kwh = period_export_caps_kwh(home_settings, horizon, dt)
 
     logger.info(f"Optimization using dt={dt} hours for horizon={horizon} periods")
 
@@ -2423,9 +2489,10 @@ def optimize_battery_schedule(
         currency=currency,
         max_charge_power_per_period=max_charge_power_per_period,
         import_cap_kwh=import_cap_kwh,
-        export_cap_kwh=export_cap_kwh,
+        feed_in_cap_kwh=feed_in_cap_kwh,
         capabilities=capabilities,
         min_grid_export_kwh=min_grid_export_kwh_per_period,
+        export_cap_kwh=export_cap_kwh,
     )
 
     # Step 2: Reconstruct the optimal path with continuous SoE propagation.
@@ -2484,9 +2551,10 @@ def optimize_battery_schedule(
             max_charge_power_per_period=max_charge_power_per_period,
             capabilities=capabilities,
             import_cap_kwh=import_cap_kwh,
-            export_cap_kwh=export_cap_kwh,
+            feed_in_cap_kwh=feed_in_cap_kwh,
             sell_price_floored=sell_price_floored,
             min_grid_export_kwh=min_grid_export_kwh_per_period,
+            export_cap_kwh=export_cap_kwh,
         )
         tie_margins.append(tie_margin)
         value_slopes.append(value_slope)
@@ -2597,6 +2665,9 @@ def optimize_battery_schedule(
             window_import_cap = (
                 import_cap_kwh[sl] if import_cap_kwh is not None else None
             )
+            window_export_cap = (
+                export_cap_kwh[sl] if export_cap_kwh is not None else None
+            )
             window_min_export = (
                 min_grid_export_kwh_per_period[sl]
                 if min_grid_export_kwh_per_period is not None
@@ -2649,6 +2720,8 @@ def optimize_battery_schedule(
             # the constraint precisely where it is most likely to bind. The
             # minimum export is sliced and passed for the same reason: a window
             # solved without it could splice back a hold over a forced export.
+            # The export cap (#910) likewise: without it a window could splice
+            # back a discharge exporting more than the fuse carries.
             try:
                 V_window = run_pwl_window_backward_induction(
                     window_horizon=window_horizon,
@@ -2662,8 +2735,9 @@ def optimize_battery_schedule(
                     max_charge_power_per_period=window_max_charge,
                     capabilities=capabilities,
                     import_cap_kwh=window_import_cap,
-                    export_cap_kwh=export_cap_kwh,
+                    feed_in_cap_kwh=feed_in_cap_kwh,
                     min_grid_export_kwh=window_min_export,
+                    export_cap_kwh=window_export_cap,
                 )
             except PWLWindowUnderRefinedError:
                 if window_horizon <= 1:
@@ -2697,9 +2771,10 @@ def optimize_battery_schedule(
                 max_charge_power_per_period=window_max_charge,
                 capabilities=capabilities,
                 import_cap_kwh=window_import_cap,
-                export_cap_kwh=export_cap_kwh,
+                feed_in_cap_kwh=feed_in_cap_kwh,
                 sell_price_floored=window_floored,
                 min_grid_export_kwh=window_min_export,
+                export_cap_kwh=window_export_cap,
             )
             window_resolutions[window.start] = resolution
             resolved_windows.append(window)
@@ -2805,7 +2880,7 @@ def optimize_battery_schedule(
                 import_cap_kwh=(
                     import_cap_kwh[window.end] if import_cap_kwh is not None else None
                 ),
-                export_cap_kwh=export_cap_kwh,
+                feed_in_cap_kwh=feed_in_cap_kwh,
             )
         hourly_results, reward_objective_cost = _replay_accounting_pass(
             horizon=horizon,
@@ -2823,7 +2898,7 @@ def optimize_battery_schedule(
             dt=dt,
             currency=currency,
             export_curtailment_active=export_curtailment_active,
-            export_cap_kwh=export_cap_kwh,
+            feed_in_cap_kwh=feed_in_cap_kwh,
         )
 
     # Step 3: Calculate economic summary directly from PeriodData
@@ -2908,7 +2983,7 @@ def optimize_battery_schedule(
         battery_settings=battery_settings,
         dt=dt,
         currency=currency,
-        export_cap_kwh=export_cap_kwh,
+        feed_in_cap_kwh=feed_in_cap_kwh,
     )
 
     # When export_curtailment_active, the DP's action selection optimized
@@ -2942,7 +3017,7 @@ def optimize_battery_schedule(
             battery_settings=battery_settings,
             dt=dt,
             currency=currency,
-            export_cap_kwh=export_cap_kwh,
+            feed_in_cap_kwh=feed_in_cap_kwh,
         ).economic_summary.battery_solar_cost
 
     # Both sides must also be credited for energy left at the boundary, or the

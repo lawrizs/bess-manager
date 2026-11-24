@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import tempfile
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -596,6 +597,8 @@ class SettingsStore:
                 "grid_fee_day": GRID_FEE_DAY,
                 "grid_fee_evening": GRID_FEE_EVENING,
                 "use_actual_price": USE_ACTUAL_PRICE,
+                "grid_tariff_hourly": [],
+                "grid_tariff_summer_hourly": [],
             },
             "energy_provider": {
                 "provider": "nordpool_official",
@@ -759,7 +762,7 @@ class SettingsStore:
         # config written before the corresponding migration existed.
         price = self.data.get("electricity_price")
         if isinstance(price, dict):
-            for key, default in (
+            price_defaults: list[tuple[str, Any]] = [
                 ("spot_multiplier", SPOT_MULTIPLIER),
                 ("export_spot_multiplier", EXPORT_SPOT_MULTIPLIER),
                 ("use_actual_price", USE_ACTUAL_PRICE),
@@ -768,7 +771,10 @@ class SettingsStore:
                 ("grid_fee_morning", GRID_FEE_MORNING),
                 ("grid_fee_day", GRID_FEE_DAY),
                 ("grid_fee_evening", GRID_FEE_EVENING),
-            ):
+                ("grid_tariff_hourly", []),
+                ("grid_tariff_summer_hourly", []),
+            ]
+            for key, default in price_defaults:
                 if key not in price:
                     price[key] = default
                     logger.info(

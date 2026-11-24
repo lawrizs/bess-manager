@@ -47,7 +47,13 @@ from core.bess.health_check import (
 from core.bess.influxdb_helper import is_influxdb_configured
 from core.bess.models import PeriodData
 from core.bess.savings_aggregator import DEFAULT_COUNTS, build_buckets
-from core.bess.settings import BatterySettings, canonicalize_consumption_strategy
+from core.bess.settings import (
+    BatterySettings,
+    HomeSettings,
+    canonicalize_consumption_strategy,
+    check_settings_update,
+    validate_grid_tariff,
+)
 from core.bess.settings_store import (
     ENERGY_FLOW_LINE_STYLES,
     VALID_GRID_POWER_POLARITIES,
@@ -235,6 +241,21 @@ def _validate_consumption_strategy(home_section: dict, active_sensors: dict) -> 
         )
 
 
+def _check_model_update(
+    current: BatterySettings | HomeSettings, updates: dict[str, Any]
+) -> None:
+    """Raise HTTPException(422) if the settings model would reject ``updates``.
+
+    Must run before the section is persisted (#917). ``__post_init__`` signals
+    a rejected value with ValueError, AssertionError for phase_count, or
+    TypeError when a value of the wrong type (e.g. null) reaches a comparison.
+    """
+    try:
+        check_settings_update(current, updates)
+    except (ValueError, AssertionError, TypeError) as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+
 def _validate_managed_load_sensors(home_section: dict) -> None:
     """Raise HTTPException(422) if managed_load_sensors isn't a list of entity IDs.
 
@@ -377,6 +398,14 @@ async def get_settings():
         # pointing at the migration note. Removed with the option in PR 6.
         data["influxdb_config_present"] = is_influxdb_configured()
 
+        # Whether fuse protection includes the real-time guard on the active
+        # platform/control mode, or is planning-only (#901). The Fuse
+        # Protection card warns on False; derived from the backend so the UI
+        # cannot infer it a second way.
+        data["realtime_fuse_guard_supported"] = (
+            bess_controller.system.realtime_fuse_guard_supported
+        )
+
         # Return the full per-platform sensors structure from the store.
         # Also include a flat "activeSensors" view for backwards compatibility.
         data.pop("sensors", None)
@@ -499,6 +528,15 @@ async def patch_settings(updates: dict):
                 _validate_consumption_strategy(section, effective_sensors)
                 _validate_managed_load_sensors(section)
 
+            if store_key == "electricity_price":
+                try:
+                    validate_grid_tariff(
+                        section.get("grid_tariff_hourly", []),
+                        section.get("grid_tariff_summer_hourly", []),
+                    )
+                except ValueError as e:
+                    raise HTTPException(status_code=422, detail=str(e)) from e
+
             if store_key == "sensors":
                 # A sensor removal (e.g. unmapping a phase-current sensor) can
                 # break an already-enabled power-monitoring config just as
@@ -510,11 +548,27 @@ async def patch_settings(updates: dict):
                 )
                 _validate_consumption_strategy(persisted_home, flatten_sensors(section))
 
+            # The live-model update for battery/home, built and checked
+            # against the model's own invariants BEFORE persisting: a value
+            # the model rejects must never reach bess_settings.json, or every
+            # later startup fails on it (#917).
+            # Filtered to known model fields — a stale pre-migration key
+            # (e.g. 'consumption') can coexist with its renamed successor if
+            # a migration was ever interrupted (see HOME_MODEL_ATTRS's comment
+            # in api_conversion.py); passing it straight through would raise
+            # AttributeError.
+            in_mem: dict[str, Any] = {}
+            if store_key == "battery":
+                in_mem = {k: v for k, v in section.items() if k in _BATTERY_MODEL_ATTRS}
+                _check_model_update(bess_controller.system.battery_settings, in_mem)
+            elif store_key == "home":
+                in_mem = {k: v for k, v in section.items() if k in _HOME_MODEL_ATTRS}
+                _check_model_update(bess_controller.system.home_settings, in_mem)
+
             bess_controller.settings_store.save_section(store_key, section)
 
             # Apply in-memory updates for sections that drive live behaviour
             if store_key == "battery":
-                in_mem = {k: v for k, v in section.items() if k in _BATTERY_MODEL_ATTRS}
                 if in_mem:
                     bess_controller.system.update_settings({"battery": in_mem})
                 td = section.get("temperature_derating")
@@ -526,14 +580,6 @@ async def patch_settings(updates: dict):
                         obj.weather_entity = td["weather_entity"]
 
             elif store_key == "home":
-                # Filtered to known HomeSettings fields — a stale pre-migration
-                # key (e.g. 'consumption') can coexist with its renamed
-                # successor if a migration was ever interrupted (see
-                # HOME_MODEL_ATTRS's comment in api_conversion.py); passing it
-                # straight through would raise AttributeError.
-                # (Power-monitoring sensor validation already ran above, before
-                # save_section, so the invalid combination is never persisted.)
-                in_mem = {k: v for k, v in section.items() if k in _HOME_MODEL_ATTRS}
                 bess_controller.system.update_settings({"home": in_mem})
                 ps = section.get("peak_shaving")
                 if isinstance(ps, dict):
@@ -1301,7 +1347,13 @@ async def get_inverter_status():
         if battery_soc is None:
             raise ValueError("battery_soc sensor is unavailable")
         battery_soe = (battery_soc / 100.0) * battery_settings.total_capacity
-        grid_charge_enabled = controller.grid_charge_enabled()
+        # Gate on the entity, not CONTROL_MODEL: Huawei is period_list yet has
+        # a grid-charge entity, while Solis/SPH/native SolaX have none (#885).
+        grid_charge_enabled = (
+            controller.grid_charge_enabled()
+            if controller.is_sensor_configured("grid_charge")
+            else None
+        )
         charge_power_rate = controller.get_charging_power_rate()
         discharge_power_rate = controller.get_discharging_power_rate()
         battery_charge_power = controller.get_battery_charge_power()
@@ -1339,6 +1391,13 @@ def _planned_load_kwh(period_data: PeriodData) -> float:
     """Net planned managed load (#428 overlay) of one period, 0.0 when none."""
     breakdown = period_data.consumption_breakdown
     return breakdown.planned if breakdown is not None else 0.0
+
+
+def _battery_inflows_kwh(period_data: PeriodData | None) -> tuple[float, float]:
+    """Solar and grid energy into the battery in one period, 0.0 when no data."""
+    if period_data is None:
+        return 0.0, 0.0
+    return period_data.energy.solar_to_battery, period_data.energy.grid_to_battery
 
 
 @router.get("/api/inverter/schedule")
@@ -1505,11 +1564,13 @@ async def get_growatt_detailed_schedule():
             today_actions: list[float] = []
             today_curtailed: list[bool] = []
             today_planned_loads: list[float] = []
-            today_reconciled_intents: list[str] | None = None
+            today_solar_to_battery: list[float] = []
+            today_grid_to_battery: list[float] = []
+            today_intents: list[str] | None = None
             if bess_controller.system.schedule_store.get_latest_schedule():
                 today_period_count_local = get_period_count(time_utils.today())
                 planned_intents = schedule_manager.strategic_intents
-                today_reconciled_intents = []
+                today_intents = []
                 # Resolved by exact timestamp (not positional index -
                 # optimization_period) so a standalone next-day schedule
                 # (period_data[0] anchored to tomorrow 00:00 despite
@@ -1524,6 +1585,18 @@ async def get_growatt_detailed_schedule():
                     pd_today = bess_controller.system.schedule_store.get_period_data_at(
                         time_utils.period_index_to_timestamp(period_idx)
                     )
+                    # Each row reports its own flows. Subtracting SOC across
+                    # rows mixes optimizer runs, because every elapsed slot's
+                    # plan comes from the run started in it (#866).
+                    measured = bess_controller.system.historical_store.get_period(
+                        period_idx
+                    )
+                    solar_kwh, grid_kwh = _battery_inflows_kwh(
+                        measured if measured is not None else pd_today
+                    )
+                    today_solar_to_battery.append(solar_kwh)
+                    today_grid_to_battery.append(grid_kwh)
+                    today_intents.append(planned_intent)
                     if pd_today is not None:
                         soe = pd_today.energy.battery_soe_end
                         today_soc_values.append(
@@ -1532,42 +1605,27 @@ async def get_growatt_detailed_schedule():
                             else None
                         )
                         today_actions.append(pd_today.decision.battery_action or 0.0)
-                        # Reconcile with observed_intent for actual periods so the
-                        # label reflects real physical flow, not the stale plan.
-                        observed_intent = pd_today.decision.observed_intent
-                        today_reconciled_intents.append(
-                            observed_intent
-                            if pd_today.data_source == "actual" and observed_intent
-                            else planned_intent
-                        )
                         today_curtailed.append(pd_today.decision.curtailed)
                         today_planned_loads.append(_planned_load_kwh(pd_today))
                     else:
                         today_soc_values.append(None)
                         today_actions.append(0.0)
-                        today_reconciled_intents.append(planned_intent)
                         today_curtailed.append(False)
                         today_planned_loads.append(0.0)
             raw_groups = schedule_manager.get_detailed_period_groups(
-                intents=today_reconciled_intents,
+                intents=today_intents,
                 actions=today_actions if today_actions else None,
                 soc_values=today_soc_values if today_soc_values else None,
                 curtailed=today_curtailed if today_curtailed else None,
                 planned_loads=today_planned_loads if today_planned_loads else None,
+                solar_to_battery=(
+                    today_solar_to_battery if today_solar_to_battery else None
+                ),
+                grid_to_battery=(
+                    today_grid_to_battery if today_grid_to_battery else None
+                ),
             )
-            prev_soc: float | None = None
             for group in raw_groups:
-                soc_end = group["soc_end_pct"]
-                soc_delta_kwh: float | None = None
-                if (
-                    soc_end is not None
-                    and prev_soc is not None
-                    and battery_settings.total_capacity > 0
-                ):
-                    soc_delta_kwh = (
-                        (soc_end - prev_soc) / 100.0 * battery_settings.total_capacity
-                    )
-                prev_soc = soc_end
                 period_groups.append(
                     {
                         "start_time": group["start_time"],
@@ -1592,10 +1650,11 @@ async def get_growatt_detailed_schedule():
                         "discharge_power_rate": group["discharge_rate"],
                         "grid_charge": group["grid_charge"],
                         "total_action_kwh": group["total_action_kwh"],
-                        "soc_end_pct": soc_end,
-                        "soc_delta_kwh": soc_delta_kwh,
+                        "soc_end_pct": group["soc_end_pct"],
                         "curtailed": group["curtailed"],
                         "planned_load_kwh": group["planned_load_kwh"],
+                        "solar_to_battery_kwh": group["solar_to_battery_kwh"],
+                        "grid_to_battery_kwh": group["grid_to_battery_kwh"],
                     }
                 )
         except (ValueError, KeyError, AttributeError) as e:
@@ -1614,6 +1673,8 @@ async def get_growatt_detailed_schedule():
                 tomorrow_soc_values: list[float | None] = []
                 tomorrow_curtailed: list[bool] = []
                 tomorrow_planned_loads: list[float] = []
+                tomorrow_solar_to_battery: list[float] = []
+                tomorrow_grid_to_battery: list[float] = []
                 # Resolved by exact timestamp (not positional index -
                 # optimization_period) so a standalone next-day schedule
                 # (period_data[0] anchored to tomorrow 00:00 despite
@@ -1637,6 +1698,9 @@ async def get_growatt_detailed_schedule():
                         )
                         tomorrow_curtailed.append(pd.decision.curtailed)
                         tomorrow_planned_loads.append(_planned_load_kwh(pd))
+                        solar_kwh, grid_kwh = _battery_inflows_kwh(pd)
+                        tomorrow_solar_to_battery.append(solar_kwh)
+                        tomorrow_grid_to_battery.append(grid_kwh)
                     else:
                         tomorrow_soc_values.append(None)
                         tomorrow_curtailed.append(False)
@@ -1647,23 +1711,11 @@ async def get_growatt_detailed_schedule():
                         soc_values=tomorrow_soc_values,
                         curtailed=tomorrow_curtailed,
                         planned_loads=tomorrow_planned_loads,
+                        solar_to_battery=tomorrow_solar_to_battery,
+                        grid_to_battery=tomorrow_grid_to_battery,
                     )
                     tomorrow_period_groups = []
-                    prev_soc_tmr: float | None = None
                     for group in raw_tomorrow_groups:
-                        soc_end = group["soc_end_pct"]
-                        soc_delta_kwh_tmr: float | None = None
-                        if (
-                            soc_end is not None
-                            and prev_soc_tmr is not None
-                            and battery_settings.total_capacity > 0
-                        ):
-                            soc_delta_kwh_tmr = (
-                                (soc_end - prev_soc_tmr)
-                                / 100.0
-                                * battery_settings.total_capacity
-                            )
-                        prev_soc_tmr = soc_end
                         tomorrow_period_groups.append(
                             {
                                 "start_time": group["start_time"],
@@ -1692,10 +1744,11 @@ async def get_growatt_detailed_schedule():
                                 "discharge_power_rate": group["discharge_rate"],
                                 "grid_charge": group["grid_charge"],
                                 "total_action_kwh": group["total_action_kwh"],
-                                "soc_end_pct": soc_end,
-                                "soc_delta_kwh": soc_delta_kwh_tmr,
+                                "soc_end_pct": group["soc_end_pct"],
                                 "curtailed": group["curtailed"],
                                 "planned_load_kwh": group["planned_load_kwh"],
+                                "solar_to_battery_kwh": group["solar_to_battery_kwh"],
+                                "grid_to_battery_kwh": group["grid_to_battery_kwh"],
                             }
                         )
         except (AttributeError, KeyError, ValueError) as e:
@@ -1902,8 +1955,9 @@ async def recheck_system_health():
 
     Unlike GET /api/system-health (which runs a fresh check but doesn't touch
     the cache), this updates ``_cached_health_results``/``_critical_sensor_failures``
-    so the dashboard banner immediately reflects the result — for a "Recheck now"
-    button after the user fixes a sensor in Home Assistant.
+    so a fixed problem immediately leaves the dashboard banner — for a "Recheck
+    now" button after the user fixes a sensor in Home Assistant. A newly found
+    problem still has to persist before it raises one.
     """
     from app import bess_controller
 
@@ -1988,10 +2042,16 @@ async def get_dashboard_health_summary():
     try:
         logger.debug("Starting dashboard health summary check")
 
+        sustained_failures = bess_controller.system.get_sustained_health_failures()
+        critical_failures = [
+            failure
+            for failure in bess_controller.system.get_critical_sensor_failures()
+            if failure in sustained_failures
+        ]
+
         # Check if system is in degraded mode first
-        if bess_controller.system.has_critical_sensor_failures():
+        if critical_failures:
             # System is in degraded mode due to critical sensor failures
-            critical_failures = bess_controller.system.get_critical_sensor_failures()
             cached_results = bess_controller.system.get_cached_health_results() or {}
             components_by_name = {
                 component.get("name"): component
@@ -2057,6 +2117,7 @@ async def get_dashboard_health_summary():
                 component
                 for component in health_results.get("checks", [])
                 if component.get("status") in ("WARNING", "ERROR")
+                and component.get("name") in sustained_failures
             ]
             has_critical_error = any(
                 component.get("required") and component.get("status") == "ERROR"
@@ -2774,6 +2835,16 @@ async def get_consumption_forecast_comparison():
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+async def _inverter_schedule_view_for_export() -> dict:
+    # A bundle matters most when the system is broken, so a schedule the page
+    # could not load is recorded in its section rather than failing the export.
+    try:
+        view: dict = await get_growatt_detailed_schedule()
+        return view
+    except HTTPException as e:
+        return {"error": str(e.detail)}
+
+
 @router.get("/api/export-debug-data")
 async def export_debug_data(compact: bool = True):
     """Export comprehensive debug data as markdown report.
@@ -2809,6 +2880,7 @@ async def export_debug_data(compact: bool = True):
             settings_data=bess_controller.settings_store.data,
         )
         export_data = aggregator.aggregate_all_data(compact=compact)
+        export_data.inverter_schedule_view = await _inverter_schedule_view_for_export()
 
         # Format as markdown report
         formatter = DebugReportFormatter()
@@ -3443,6 +3515,8 @@ async def setup_complete(payload: APISetupCompletePayload):
             "gridFeeMorning": "grid_fee_morning",
             "gridFeeDay": "grid_fee_day",
             "gridFeeEvening": "grid_fee_evening",
+            "gridTariffHourly": "grid_tariff_hourly",
+            "gridTariffSummerHourly": "grid_tariff_summer_hourly",
         }
         area = payload.area or payload.nordpoolArea
         if any(getattr(payload, f) is not None for f in _PRICE_MAP) or area:
@@ -3452,6 +3526,13 @@ async def setup_complete(payload: APISetupCompletePayload):
             for field, key in _PRICE_MAP.items():
                 if getattr(payload, field) is not None:
                     elec[key] = getattr(payload, field)
+            try:
+                validate_grid_tariff(
+                    elec.get("grid_tariff_hourly", []),
+                    elec.get("grid_tariff_summer_hourly", []),
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=str(e)) from e
             sections["electricity_price"] = elec
 
         # --- energy provider ---
@@ -3520,41 +3601,6 @@ async def setup_complete(payload: APISetupCompletePayload):
         if payload.demoMode is not None:
             sections["demo_mode"] = {"enabled": payload.demoMode}
 
-        # Persist all sections atomically
-        bess_controller.settings_store.save_all(sections)
-
-        # Activate the inverter controller on the live system.  On a fresh
-        # install this is the first time a platform is set, transitioning the
-        # system from unconfigured → operational.
-        if "inverter" in sections:
-            bess_controller.system.switch_inverter_platform(
-                sections["inverter"]["platform"]
-            )
-            # switch_inverter_platform() resets control_mode to its platform
-            # default — apply an explicit wizard choice afterward. Only
-            # solax_modbus_growatt_min (GEN4) accepts an explicit choice here:
-            # GEN3 (solax_modbus_growatt_sph) was already resolved to "vpp"
-            # by switch_inverter_platform() above, and re-applying a stale
-            # client-side "tou" default would raise, since GEN3 rejects any
-            # other value.
-            if (
-                payload.inverterControlMode is not None
-                and sections["inverter"]["platform"] == "solax_modbus_growatt_min"
-            ):
-                bess_controller.system.switch_control_mode(payload.inverterControlMode)
-
-        # Apply settings to live system so BESS starts immediately without
-        # requiring a restart. Unconditional, not gated on payload.sensors:
-        # an inverter platform switch above also changes service_domain and
-        # the power polarities. ha_controller.sensors is a live settings_store
-        # view (#334) and needs no equivalent refresh.
-        bess_controller.refresh_service_domain()
-        bess_controller.refresh_power_polarities()
-        if payload.growattDeviceId:
-            bess_controller.ha_controller.growatt_device_id = payload.growattDeviceId
-        if payload.huaweiDeviceId:
-            bess_controller.ha_controller.huawei_device_id = payload.huaweiDeviceId
-
         def _nn(d: dict) -> dict:
             """Strip None values so update() only overwrites explicitly provided fields."""
             return {k: v for k, v in d.items() if v is not None}
@@ -3608,8 +3654,57 @@ async def setup_complete(payload: APISetupCompletePayload):
                     "grid_fee_morning": payload.gridFeeMorning,
                     "grid_fee_day": payload.gridFeeDay,
                     "grid_fee_evening": payload.gridFeeEvening,
+                    "grid_tariff_hourly": payload.gridTariffHourly,
+                    "grid_tariff_summer_hourly": payload.gridTariffSummerHourly,
                 }
             )
+        # Check the live-model updates against the models' own invariants
+        # BEFORE persisting: a value the model rejects must never reach
+        # bess_settings.json, or every later startup fails on it (#917).
+        if "battery" in live_updates:
+            _check_model_update(
+                bess_controller.system.battery_settings, live_updates["battery"]
+            )
+        if "home" in live_updates:
+            _check_model_update(
+                bess_controller.system.home_settings, live_updates["home"]
+            )
+
+        # Persist all sections atomically
+        bess_controller.settings_store.save_all(sections)
+
+        # Activate the inverter controller on the live system.  On a fresh
+        # install this is the first time a platform is set, transitioning the
+        # system from unconfigured → operational.
+        if "inverter" in sections:
+            bess_controller.system.switch_inverter_platform(
+                sections["inverter"]["platform"]
+            )
+            # switch_inverter_platform() resets control_mode to its platform
+            # default — apply an explicit wizard choice afterward. Only
+            # solax_modbus_growatt_min (GEN4) accepts an explicit choice here:
+            # GEN3 (solax_modbus_growatt_sph) was already resolved to "vpp"
+            # by switch_inverter_platform() above, and re-applying a stale
+            # client-side "tou" default would raise, since GEN3 rejects any
+            # other value.
+            if (
+                payload.inverterControlMode is not None
+                and sections["inverter"]["platform"] == "solax_modbus_growatt_min"
+            ):
+                bess_controller.system.switch_control_mode(payload.inverterControlMode)
+
+        # Apply settings to live system so BESS starts immediately without
+        # requiring a restart. Unconditional, not gated on payload.sensors:
+        # an inverter platform switch above also changes service_domain and
+        # the power polarities. ha_controller.sensors is a live settings_store
+        # view (#334) and needs no equivalent refresh.
+        bess_controller.refresh_service_domain()
+        bess_controller.refresh_power_polarities()
+        if payload.growattDeviceId:
+            bess_controller.ha_controller.growatt_device_id = payload.growattDeviceId
+        if payload.huaweiDeviceId:
+            bess_controller.ha_controller.huawei_device_id = payload.huaweiDeviceId
+
         if live_updates:
             bess_controller.system.update_settings(live_updates)
 

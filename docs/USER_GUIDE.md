@@ -320,7 +320,7 @@ Once BESS has the raw spot price from your provider, it applies your configured 
 
 The formulas:
 
-- **Buy price** = (spot × import multiplier + markup) × VAT multiplier + additional costs + time-of-use grid fee
+- **Buy price** = (spot × import multiplier + markup) × VAT multiplier + additional costs + time-of-use grid fee + hourly grid tariff
 - **Sell price** = spot × export multiplier + export compensation
 
 #### Setting a fixed sell price
@@ -352,6 +352,8 @@ Home Assistant local time:
 Public holidays are billed on the weekend schedule by most operators. BESS does
 not detect them, so on those days the morning and evening rates are still
 applied — a small overestimate of cost on roughly a dozen days a year.
+
+**Time-of-day grid tariff** (optional): if your grid operator charges a transport fee that varies by hour — e.g. Danish DSOs such as Radius, with low/high/peak bands — enable **Hourly grid tariff** under Settings → Electricity Pricing and enter the fee for each hour (per kWh, including VAT). Turn on **Separate summer and winter tariffs** to enter one profile for October–March and another for April–September. Remove the grid fee from Additional Costs so it is not counted twice; keep only the fixed parts (such as electricity tax) there.
 
 For Octopus Energy, prices are already final (VAT-inclusive, GBP/kWh). Markup, VAT, and Additional Costs are not applied — only Export Compensation is used.
 

@@ -14,6 +14,7 @@ All user-facing settings should be configured and overridden via config.yaml:
 For production configuration, all user-facing values must be properly configured in config.yaml.
 """
 
+import copy
 from dataclasses import dataclass, field, fields
 from datetime import datetime
 from typing import Any
@@ -46,6 +47,11 @@ GRID_FEE_MORNING = 0.08349
 GRID_FEE_DAY = 0.10406
 GRID_FEE_EVENING = 0.14641
 USE_ACTUAL_PRICE = False  # Use raw Nordpool spot prices or include markup, VAT, etc.
+# Time-of-day grid tariff (#861): 24 hourly per-kWh fees incl. VAT, added to the
+# buy price on top of ADDITIONAL_COSTS. Empty = no time-of-day tariff. When a
+# summer profile is also set it replaces the year-round one in these months.
+GRID_TARIFF_HOURS = 24
+GRID_TARIFF_SUMMER_MONTHS = frozenset(range(4, 10))  # April..September
 FREE_IMPORT_PRICE = 0.0  # buy price during an Octoplus free power window
 FREE_IMPORT_CAP_KWH = 16.0  # Weekend Happy Hour allowance; not modelled by the DP
 POWER_DOWN_EXPORT_KW = 1.0  # Octoplus Power Down export pulse rate
@@ -103,6 +109,32 @@ CYCLE_COST_BY_CURRENCY: dict[str, float] = {
 }
 
 
+def validate_grid_tariff(year_round: list[float], summer: list[float]) -> None:
+    """Reject a grid tariff profile the buy-price calculation cannot apply.
+
+    Each profile is empty (unset) or exactly GRID_TARIFF_HOURS values. A summer
+    profile only splits the year-round one into seasons, so it needs one.
+
+    Raises:
+        ValueError: If a profile has the wrong length, or a summer profile is
+            set without a year-round profile.
+    """
+    for name, profile in (
+        ("grid_tariff_hourly", year_round),
+        ("grid_tariff_summer_hourly", summer),
+    ):
+        if profile and len(profile) != GRID_TARIFF_HOURS:
+            raise ValueError(
+                f"{name} must have {GRID_TARIFF_HOURS} hourly values, "
+                f"got {len(profile)}"
+            )
+    if summer and not year_round:
+        raise ValueError(
+            "grid_tariff_summer_hourly requires grid_tariff_hourly "
+            "(the winter / year-round profile)"
+        )
+
+
 @dataclass
 class PriceSettings:
     """Price settings for electricity costs."""
@@ -120,6 +152,8 @@ class PriceSettings:
     grid_fee_day: float = GRID_FEE_DAY
     grid_fee_evening: float = GRID_FEE_EVENING
     use_actual_price: bool = USE_ACTUAL_PRICE
+    grid_tariff_hourly: list[float] = field(default_factory=list)
+    grid_tariff_summer_hourly: list[float] = field(default_factory=list)
 
     def update(self, **kwargs: Any) -> None:
         """Update settings from a snake_case dict — the store's native format.
@@ -134,6 +168,7 @@ class PriceSettings:
             if key not in valid_fields:
                 raise AttributeError(f"PriceSettings has no attribute '{key}'")
             setattr(self, key, value)
+        validate_grid_tariff(self.grid_tariff_hourly, self.grid_tariff_summer_hourly)
 
 
 @dataclass
@@ -171,7 +206,7 @@ class BatterySettings:
     # load-prediction miss stops becoming a grid import/export.
     #
     # It is a planning fact as much as a write fact: the controller's
-    # load_support_delivers_exact_cover follows this flag, so the DP may
+    # load_support_delivery follows this flag, so the DP may
     # enumerate the off-lattice exact-cover candidate only where native load
     # support is actually on. Other platforms ignore it -- see SolaxController.
     solax_native_load_support_enabled: bool = False
@@ -354,6 +389,20 @@ class HomeSettings:
             self.power_monitoring_enabled = home_config["power_monitoring_enabled"]
             self.__post_init__()
         return self
+
+
+def check_settings_update(
+    current: BatterySettings | HomeSettings, updates: dict[str, Any]
+) -> None:
+    """Raise exactly what ``current.update(**updates)`` would raise, without
+    modifying ``current``.
+
+    Lets a caller reject an update before persisting it. The invariants stay
+    declared only in the model's ``__post_init__``; this runs them on a copy.
+    A value persisted before being checked survives the rejection and makes
+    every later startup fail on the same invariant (#917).
+    """
+    copy.deepcopy(current).update(**updates)
 
 
 @dataclass

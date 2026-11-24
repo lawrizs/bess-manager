@@ -95,8 +95,9 @@ def start() -> None
   `power_monitoring_enabled` — derives a per-period grid-import cap that
   constrains total import (load + battery charging), forcing the battery to
   cover a load spike via discharge rather than importing past the house's
-  fuse limit. See `docs/agents/bess-knowledge.md`'s "grid import (fuse) cap"
-  section (#429).
+  fuse limit. The same limit caps grid export (#910), since a fuse trips in
+  either direction. See `docs/agents/bess-knowledge.md`'s "grid import (fuse)
+  cap" section (#429).
 - An optional peak-shaving window (`BatterySystemManager.peak_shaving`) — a
   user-configured per-period grid-import cap, active only during a
   configured time window/weekdays, combined with the fuse cap above via
@@ -203,7 +204,7 @@ These resolve to platform-specific entities via the sensor config (e.g. `grid_ch
 **Price Calculation**:
 
 ```python
-buy_price = (spot_price + markup) * vat_multiplier + additional_costs
+buy_price = (spot_price + markup) * vat_multiplier + additional_costs + grid_tariff[local_hour]
 sell_price = spot_price * export_rate - tax_reduction
 ```
 
@@ -214,9 +215,8 @@ sell_price = spot_price * export_rate - tax_reduction
 **Key Responsibilities**:
 
 - Monitor electrical phase loading to prevent circuit overload
-- Calculate available charging power from house-only phase load (the
-  battery's own draw is subtracted from the grid-side phase sensors), every
-  minute
+- Move the charging rate by the headroom left on the most loaded grid-side
+  phase sensor, every minute
 - Dynamically adjust battery charging power to stay within fuse limits
 - Provide safety margins for electrical system protection
 
@@ -271,7 +271,9 @@ sell_price = spot_price * export_rate - tax_reduction
    └── PriceManager.refresh_cache() fetches today (+ tomorrow, once the
        market has published it) into the cache, synchronously, once
    └── The optimizer thereafter reads prices cache-only; a dedicated
-       scheduler job keeps the cache warm off the control path (#709)
+       scheduler job keeps the cache warm off the control path (#709),
+       re-fetching each cached day so it follows a source that replaces
+       a complete day (#902)
 
 4. Initial Optimization
 
@@ -366,7 +368,7 @@ The InverterController converts action intents into hardware-specific schedules.
 
 **Why SOLAR_EXPORT uses load_first (not grid_first)**: Solar exports naturally in `load_first` when generation exceeds consumption — no special inverter mode is needed. `SOLAR_EXPORT` exists as a distinct intent purely for UI display (distinguishing "solar actively exporting" from "nothing happening"). Using `grid_first` for battery-idle periods would lock the inverter in a mode that prevents the battery from supporting house load during temporary solar deficits.
 
-**VPP-style control is the exception to this table** (`SolaxModbusGrowattController` `control_mode="vpp"`, `SolaxController`): these platforms have no `charge_rate` register at all (`supports_charge_rate_control=False`), so `load_first` vs. `grid_first` isn't selected via a persistent TOU mode the way it is here — it's chosen per-period from signals threaded through `InverterController.apply_period`: a `block_passive_charging` signal (derived from this same table's `charge_rate` column: `0` → block) distinguishes `SOLAR_EXPORT` from `SOLAR_STORAGE`/`IDLE`, and a `strategic_intent` signal distinguishes `LOAD_SUPPORT` from `BATTERY_EXPORT` — both intents share identical `(grid_charge, discharge_rate)` values from the table above, but `SolaxModbusGrowattController`'s VPP mode releases control entirely for `LOAD_SUPPORT` (`vpp_remote_control` disabled, falling back to the inverter's own `load_first` self-consumption) rather than forcing a fixed `grid_first` rate the way `BATTERY_EXPORT` still does (issue #413). See
+**VPP-style control is the exception to this table** (`SolaxModbusGrowattController` `control_mode="vpp"`, `SolaxController`): these platforms have no `charge_rate` register at all (`supports_charge_rate_control=False`), so `load_first` vs. `grid_first` isn't selected via a persistent TOU mode the way it is here — it's chosen per-period from signals threaded through `InverterController.apply_period`: a `block_passive_charging` signal (derived from this same table's `charge_rate` column: `0` → block) distinguishes `SOLAR_EXPORT` from `SOLAR_STORAGE`/`IDLE`, and a `strategic_intent` signal distinguishes `LOAD_SUPPORT` from `BATTERY_EXPORT` — both intents share identical `(grid_charge, discharge_rate)` values from the table above, but `SolaxModbusGrowattController`'s VPP mode releases control entirely for `LOAD_SUPPORT` (`vpp_remote_control` disabled, falling back to the inverter's own `load_first` self-consumption) rather than forcing a fixed `grid_first` rate the way `BATTERY_EXPORT` still does (issue #413), except at a zero discharge rate (the discharge inhibit), where it holds `battery_first` like `IDLE` (issue #881). See
 [`docs/INVERTER_PLATFORMS.md`](INVERTER_PLATFORMS.md)'s "SOLAR_EXPORT semantics" section and
 [`docs/superpowers/specs/2026-07-20-vpp-passive-charge-block-design.md`](superpowers/specs/2026-07-20-vpp-passive-charge-block-design.md)
 for the full VPP-mode design (issue #355).
@@ -408,7 +410,7 @@ influxdb:
 All other settings are stored in this file and managed via the settings API. Top-level sections:
 
 - **`battery`**: `total_capacity`, `min_soc`, `max_soc`, `max_charge_power_kw`, `max_discharge_power_kw`, `cycle_cost_per_kwh`, `charging_power_rate`, `efficiency_charge`, `efficiency_discharge`
-- **`electricity_price`**: `area`, `markup_rate`, `vat_multiplier`, `additional_costs`, `tax_reduction`, `use_actual_price`
+- **`electricity_price`**: `area`, `markup_rate`, `vat_multiplier`, `additional_costs`, `tax_reduction`, `spot_multiplier`, `export_spot_multiplier`, `grid_tariff_hourly`, `grid_tariff_summer_hourly` (24 hourly fees each; empty = off), `use_actual_price`
 - **`home`**: `max_fuse_current`, `voltage`, `safety_margin`, `phase_count`, `default_hourly`, `currency`, `consumption_strategy`, `power_monitoring_enabled`
 - **`growatt`**: Inverter device ID and integration settings
 - **`sensors`**: Entity ID mappings for all Home Assistant sensors
@@ -468,11 +470,13 @@ supports_charge_rate_control: ClassVar[bool] = False
 supports_charge_rate_control: ClassVar[bool] = False
 ```
 
-| Capability | Description | MIN | SPH | SolaX Native | Modbus Growatt MIN |
-|---|---|---|---|---|---|
-| `supports_charge_rate_control` | Per-period charge/discharge rate register | Yes | **No** | **No** | Yes |
+| Capability | Description | MIN | SPH | SolaX Native | Modbus Growatt MIN (TOU) | Modbus Growatt (VPP) | Huawei | Solis |
+|---|---|---|---|---|---|---|---|---|
+| `supports_charge_rate_control` | Per-period charge/discharge rate register | Yes | **No** | **No** | Yes | **No** | **No** | **No** |
 
-SPH controls charge power globally via `write_ac_charge_times(charge_power=100%)`. SolaX native uses VPP active-power commands. Neither has a per-period register that the power monitor can read/write, so fuse protection cannot function.
+SPH controls charge power globally via `write_ac_charge_times(charge_power=100%)`. SolaX native and Growatt VPP mode use active-power commands. None of them has a per-period register the power monitor can read/write, so the real-time fuse guard cannot run there.
+
+BSM exposes this as `realtime_fuse_guard_supported` (#901), the one declaration everything about the real-time fuse guard derives from. `_sync_power_monitor()` keeps a `HomePowerMonitor` in existence exactly when fuse protection is enabled and the guard is supported, re-evaluated at startup, on home-settings changes, and on a control-mode or platform switch. When fuse protection is enabled but the guard is unsupported, the health check reports Power Monitoring as `OK` with a "Planning-only" explanation, because only the DP's forecast-based import cap is protecting the fuse there. It is deliberately not `WARNING`: that is a fixed platform property, not a fault, and every `WARNING` component reaches the dashboard banner on every page open (#911). `GET /api/settings` returns the flag so the Settings page can say so too.
 
 #### Frontend Gating
 
@@ -483,6 +487,8 @@ The frontend disables UI features based on **sensor presence**, which correlates
 - HA Statistics strategy: disabled when `lifetime_load_consumption` sensor is not configured
 
 Sensor-based gating is the right default. A dedicated capabilities API should only be introduced when the frontend needs to gate on something that doesn't map to sensor presence.
+
+Growatt VPP mode is such a case. The `battery_charging_power_rate` entity exists there (it is the TOU-mode register), but the controller never throttles it. The Fuse Protection card therefore reads `realtimeFuseGuardSupported` from `GET /api/settings` and shows a "planning-only protection" note when it is false (#901). The toggle stays enabled, because the DP's import cap still applies.
 
 #### Evolution Path
 
@@ -537,7 +543,7 @@ Both the official HA Nordpool integration and the older HACS custom component (`
 2. **The user selects** which provider to use in the Setup Wizard or Settings page (radio button: "Nord Pool (official HA integration)" vs "Nord Pool (HACS custom sensor)").
 3. **At runtime**, the selected provider determines how prices are fetched:
    - `nordpool_official`: Calls `nordpool.get_prices_for_date` service action (requires `config_entry_id`). That service is keyed by Nord Pool's **CET delivery day** (`deliveryDateCET`), not the user's local day, and every entry carries UTC `start`/`end`. The source therefore derives which delivery days overlap the local day, fetches each, and maps every quarterly period to the entry whose `[start, end)` contains it. For a CET area that is one delivery day and an identity mapping; for an EET area (LT/LV/EE/FI, CET+1) the local day also needs the previous delivery day, whose final hour is local 00:00-01:00. Reading the response positionally instead put every EET price one hour early and never fetched that first hour at all.
-   - `nordpool`: Reads quarterly prices from a single sensor entity's attributes. The timestamp-validated `raw_today`/`raw_tomorrow` arrays are preferred; otherwise it falls back to the plain `today`/`tomorrow` lists (VAT stripped). Tomorrow's plain list is used only when the sensor's `tomorrow_valid` attribute is true — before Nordpool publishes next-day prices it stays false while `tomorrow` still mirrors `today`, which if trusted inflated cached prices by the VAT multiplier (issue #704).
+   - `nordpool`: Reads quarterly prices from a single sensor entity's attributes. The timestamp-validated `raw_today`/`raw_tomorrow` arrays are preferred; otherwise it falls back to the plain `today`/`tomorrow` lists. Prices are returned VAT-inclusive as published; the source declares `prices_include_vat` and `PriceManager` divides by its own `vat_multiplier`, so the configured VAT is applied by one owner (issue #903). Tomorrow's plain list is used only when the sensor's `tomorrow_valid` attribute is true — before Nordpool publishes next-day prices it stays false while `tomorrow` still mirrors `today`, which if trusted inflated cached prices by the VAT multiplier (issue #704).
 
 #### Stage 2 — Intermediate Identifiers from Entity IDs
 
@@ -680,6 +686,13 @@ The system includes comprehensive health checking:
 - **Energy Balance**: Physics validation of measured energy flows
 - **Optimization Health**: Algorithm convergence and result validation
 - **Hardware Connection**: Inverter communication and control verification
+
+**Banner policy**: the Health page always shows the latest check. The dashboard
+banner waits until a check still finds the problem at least 3 minutes after it
+first appeared, so a bad check (typically integrations still loading after a
+restart) raises nothing and leaves no "Recovered" note. Write-failure banners appear only once a period's
+retries have run out, or once a single service call has used up its attempts,
+and clear on the next successful write to the same entity.
 
 **Severity model**: each component check is governed by two flags —
 `is_required` (is this component critical to the system, used to set the
@@ -873,6 +886,7 @@ mock-run.sh                 ← starts Docker Compose
 | `historical_periods` | Actual measured energy flows — seeded directly into the historical store, no recorder query needed |
 | `price_data` | Raw quarterly prices for `nordpool_official` service call responses, authored as **local**-day arrays (index 0 = local 00:00); mock-HA lays them on a UTC timeline and serves whichever CET delivery day is asked for |
 | `addon_options` | Complete sensor entity IDs, inverter device ID, price provider config |
+| `consumption_overlay` | Declared Planned Consumption Changes blocks paired hour-by-hour with measured managed-load energy (last 48 h); analysis only, not replayed |
 | `inverter_tou_segments` | Current inverter memory state for `read_time_segments` responses |
 | `export_timestamp` + `timezone` | Pins `mock_time` so BESS computes the same optimization period |
 

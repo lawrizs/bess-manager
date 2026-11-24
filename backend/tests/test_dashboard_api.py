@@ -8,7 +8,9 @@ in _aggregate_quarterly_to_hourly.
 import sys
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
-from unittest.mock import MagicMock
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import MagicMock, patch
 
 import pytest
 from api import _aggregate_quarterly_to_hourly, router
@@ -180,6 +182,8 @@ def _make_started_controller() -> MagicMock:
     ctrl.system.get_health_recoveries.return_value = []
     ctrl.system.acknowledge_health_recoveries.return_value = 0
     ctrl.system.has_critical_sensor_failures.return_value = False
+    ctrl.system.get_critical_sensor_failures.return_value = []
+    ctrl.system.get_sustained_health_failures.return_value = set()
     ctrl.system.get_cached_health_results.return_value = {
         "checks": [],
         "system_mode": "normal",
@@ -817,10 +821,41 @@ class TestDashboardHealthSummary:
         resp = _client.get("/api/dashboard-health-summary")
         assert resp.status_code == 503
 
+    def test_planning_only_fuse_protection_raises_no_banner(self) -> None:
+        """#911: on a platform with no real-time fuse guard, the health check
+        explains planning-only protection, but that is a fixed property of the
+        platform, not a fault -- it must not put a banner on every dashboard
+        open. Drives the real health check output through the endpoint."""
+        from core.bess.health_check import run_system_health_checks
+
+        system_manager = MagicMock()
+        system_manager._price_manager.check_health.return_value = []
+        system_manager._inverter_controller.check_health.return_value = []
+        system_manager.sensor_collector.check_health.return_value = []
+        system_manager._controller.sensors.get.return_value = None
+        system_manager._runtime_failure_tracker.get_failure_stats.return_value = {}
+        system_manager.home_settings.power_monitoring_enabled = True
+        system_manager.realtime_fuse_guard_supported = False
+        system_manager._power_monitor = None
+        health = run_system_health_checks(system_manager)
+
+        ctrl = _make_started_controller()
+        ctrl.system.get_cached_health_results.return_value = health
+        # Sustained: a fixed platform property never clears.
+        ctrl.system.get_sustained_health_failures.return_value = {"Power Monitoring"}
+        sys.modules["app"].bess_controller = ctrl  # type: ignore[attr-defined]
+
+        body = _client.get("/api/dashboard-health-summary").json()
+
+        assert body["hasWarnings"] is False
+        assert body["hasCriticalErrors"] is False
+        assert body["criticalIssues"] == []
+
     def test_critical_issue_names_the_failing_component(self):
         ctrl = _make_started_controller()
         ctrl.system.has_critical_sensor_failures.return_value = True
         ctrl.system.get_critical_sensor_failures.return_value = ["Battery Control"]
+        ctrl.system.get_sustained_health_failures.return_value = {"Battery Control"}
         ctrl.system.get_cached_health_results.return_value = {
             "checks": [
                 {
@@ -858,6 +893,11 @@ class TestDashboardHealthSummary:
             "Battery Monitoring",
             "Energy Monitoring",
         ]
+        ctrl.system.get_sustained_health_failures.return_value = {
+            "Battery Control",
+            "Battery Monitoring",
+            "Energy Monitoring",
+        }
         ctrl.system.get_cached_health_results.return_value = {
             "checks": [
                 {
@@ -933,6 +973,10 @@ class TestDashboardHealthSummary:
             "Battery Control",
             "Battery Monitoring",
         ]
+        ctrl.system.get_sustained_health_failures.return_value = {
+            "Battery Control",
+            "Battery Monitoring",
+        }
         ctrl.system.get_cached_health_results.return_value = {
             "checks": [
                 {
@@ -963,6 +1007,69 @@ class TestDashboardHealthSummary:
             "Battery Monitoring",
         }
         assert resp.json()["totalCriticalIssues"] == 2
+
+    def test_problem_seen_on_one_check_raises_no_banner(self) -> None:
+        """#875: the first failed check is usually a restart or a blip."""
+        ctrl = _make_started_controller()
+        ctrl.system.has_critical_sensor_failures.return_value = True
+        ctrl.system.get_critical_sensor_failures.return_value = ["Battery Control"]
+        ctrl.system.get_sustained_health_failures.return_value = set()
+        ctrl.system.get_cached_health_results.return_value = {
+            "checks": [
+                {
+                    "name": "Battery Control",
+                    "status": "ERROR",
+                    "required": True,
+                    "checks": [],
+                },
+                {
+                    "name": "Power Monitoring",
+                    "status": "WARNING",
+                    "required": False,
+                    "checks": [],
+                },
+            ],
+            "system_mode": "normal",
+        }
+        sys.modules["app"].bess_controller = ctrl  # type: ignore[attr-defined]
+
+        body = _client.get("/api/dashboard-health-summary").json()
+
+        assert body["hasCriticalErrors"] is False
+        assert body["hasWarnings"] is False
+        assert body["criticalIssues"] == []
+
+    def test_sustained_warning_shows_while_a_new_error_is_still_unconfirmed(
+        self,
+    ) -> None:
+        ctrl = _make_started_controller()
+        ctrl.system.has_critical_sensor_failures.return_value = True
+        ctrl.system.get_critical_sensor_failures.return_value = ["Battery Control"]
+        ctrl.system.get_sustained_health_failures.return_value = {"Power Monitoring"}
+        ctrl.system.get_cached_health_results.return_value = {
+            "checks": [
+                {
+                    "name": "Battery Control",
+                    "status": "ERROR",
+                    "required": True,
+                    "checks": [],
+                },
+                {
+                    "name": "Power Monitoring",
+                    "status": "WARNING",
+                    "required": False,
+                    "checks": [],
+                },
+            ],
+            "system_mode": "normal",
+        }
+        sys.modules["app"].bess_controller = ctrl  # type: ignore[attr-defined]
+
+        body = _client.get("/api/dashboard-health-summary").json()
+
+        assert body["hasCriticalErrors"] is False
+        assert body["hasWarnings"] is True
+        assert [i["detail"] for i in body["criticalIssues"]] == ["Power Monitoring"]
 
 
 # ===========================================================================
@@ -1168,6 +1275,38 @@ class TestExportDebugData:
         sys.modules["app"].bess_controller = _make_started_controller()
         resp = _client.get("/api/export-debug-data")
         assert resp.status_code == 200
+
+    @staticmethod
+    def _exported_schedule_view(controller: MagicMock) -> dict:
+        app_module: Any = sys.modules["app"]
+        app_module.bess_controller = controller
+        captured: dict = {}
+
+        def capture(_formatter: object, export: SimpleNamespace) -> str:
+            captured.update(export.inverter_schedule_view)
+            return ""
+
+        with (
+            patch(
+                "core.bess.debug_data_exporter.DebugDataAggregator.aggregate_all_data",
+                return_value=SimpleNamespace(),
+            ),
+            patch(
+                "core.bess.debug_report_formatter.DebugReportFormatter.format_report",
+                capture,
+            ),
+        ):
+            resp = _client.get("/api/export-debug-data")
+        assert resp.status_code == 200
+        return captured
+
+    def test_bundle_carries_the_inverter_page_response(self) -> None:
+        view = self._exported_schedule_view(_make_started_controller())
+        assert "periodGroups" in view
+
+    def test_unavailable_inverter_page_does_not_lose_the_bundle(self) -> None:
+        view = self._exported_schedule_view(_unconfigured_controller())
+        assert view["error"]
 
 
 # ===========================================================================

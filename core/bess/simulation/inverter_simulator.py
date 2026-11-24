@@ -197,7 +197,7 @@ def mode_to_power(
     soe: float,
     settings: BatterySettings,
     dt: float,
-    export_cap_kwh: float | None = None,
+    feed_in_cap_kwh: float | None = None,
 ) -> float | None:
     """Battery power (kW; + charge, - discharge) the Growatt MIN inverter applies
     for one period under the given command and conditions. This is the v1 mode
@@ -223,7 +223,7 @@ def mode_to_power(
     # clamped the same way; without this, realized diverges from planned the
     # moment the export cap binds.
     ac_cap_kwh = _period_ac_cap_kwh(
-        _effective_ac_cap_kwh(settings, dt), home, export_cap_kwh
+        _effective_ac_cap_kwh(settings, dt), home, feed_in_cap_kwh
     )
     if ac_cap_kwh is None:
         ac_headroom_kwh = float("inf")
@@ -280,7 +280,7 @@ def simulate(
     settings: BatterySettings,
     dt: float,
     currency: str = "SEK",
-    export_cap_kwh: float | None = None,
+    feed_in_cap_kwh: float | None = None,
     import_cap_kwh: list[float | None] | None = None,
 ) -> SimulationResult:
     """Execute the command sequence period-by-period, carrying SoC forward, using
@@ -304,7 +304,7 @@ def simulate(
             soe,
             settings,
             dt,
-            export_cap_kwh,
+            feed_in_cap_kwh,
         )
         if power is None:
             # SOLAR_EXPORT-below-max (#313): battery held exactly unchanged,
@@ -331,7 +331,7 @@ def simulate(
             solar_production=solar_production[t],
             battery_settings=settings,
             dt=dt,
-            export_cap_kwh=export_cap_kwh,
+            feed_in_cap_kwh=feed_in_cap_kwh,
             import_cap_kwh=period_cap,
         )
         pd = _build_period_data(

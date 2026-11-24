@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import Any
 from unittest.mock import MagicMock
 
+from core.bess.execution_model import LOAD_SUPPORT_CEILING
 from core.bess.growatt_min_controller import GrowattMinController
 from core.bess.growatt_sph_controller import GrowattSphController
 from core.bess.huawei_controller import HuaweiController
@@ -90,7 +91,7 @@ def test_exact_cover_is_only_declared_where_the_written_rate_can_deliver_it():
     """Two different flags decide two halves of the same promise, and nothing
     in the type system stops them diverging.
 
-    `load_support_delivers_exact_cover` decides whether the DP may plan a
+    `load_support_delivery == "ceiling"` decides whether the DP may plan a
     partial load cover (`action_selector._residual_cover_p`).
     `discharge_rate_is_load_following` decides whether the written rate is
     rounded UP as a ceiling or to nearest as a target
@@ -121,13 +122,13 @@ def test_exact_cover_is_only_declared_where_the_written_rate_can_deliver_it():
     # just as happily if the interesting case stopped existing. Count it.
     checked = 0
     for label, controller in _exact_cover_controllers():
-        if not controller.load_support_delivers_exact_cover:
+        if controller.load_support_delivery != LOAD_SUPPORT_CEILING:
             continue
         if controller.discharge_rate_is_load_following:
             continue  # ceiling: rounded up, delivers the cover exactly
         checked += 1
         assert label in provers, (
-            f"{label} declares load_support_delivers_exact_cover=True while "
+            f"{label} declares load_support_delivery='ceiling' while "
             f"its discharge rate is a forced power. The DP will plan a "
             f"partial load cover this platform cannot deliver unless it "
             f"discards the LOAD_SUPPORT rate entirely -- prove that here."

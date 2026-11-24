@@ -45,6 +45,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 from . import time_utils
 from .dp_schedule import DPSchedule
+from .execution_model import LOAD_SUPPORT_CEILING, LOAD_SUPPORT_UNMODELLED
 from .inverter_controller import InverterController
 from .settings import BatterySettings
 
@@ -81,17 +82,19 @@ class SolaxController(InverterController):
     # SolaxModbusGrowattController (:152, :159, :173) are the same shape and
     # carry the same error in the baseline; nothing assigns to it.
     @property
-    def load_support_delivers_exact_cover(self) -> bool:  # type: ignore[override]
-        """Is a planned LOAD_SUPPORT discharge delivered as
-        `min(plan, actual load)`? Only when native load support is opted into.
+    def load_support_delivery(self) -> str:  # type: ignore[override]
+        """How much of the deficit does a planned LOAD_SUPPORT period
+        deliver? `ceiling` only when native load support is opted into.
 
         By default LOAD_SUPPORT is a forced `-(rate% x max_discharge)` here,
         so a partial cover is delivered at the commanded rate whatever the
-        house is really drawing -- the DP must not plan one.
-        `solax_native_load_support_enabled` ports #413's trade to this
+        house is really drawing -- `unmodelled`, and the DP must not plan
+        one. `solax_native_load_support_enabled` ports #413's trade to this
         platform: the period is handed to the inverter's own self-use
         load-following and *no rate is written at all*, so a cover plan is
-        delivered exactly and the off-lattice candidate becomes legal.
+        delivered exactly and the off-lattice candidate becomes legal --
+        `ceiling`, the same answer #413 gives solax-modbus Growatt in VPP
+        mode.
 
         A property rather than a ClassVar because the answer is a user
         setting, read live off the `BatterySettings` instance BSM shares with
@@ -108,7 +111,9 @@ class SolaxController(InverterController):
         through the same path either way. Conflating the two was caught in
         review once already -- see `execution_model.PlatformCapabilities`.
         """
-        return self.battery_settings.solax_native_load_support_enabled
+        if self.battery_settings.solax_native_load_support_enabled:
+            return LOAD_SUPPORT_CEILING
+        return LOAD_SUPPORT_UNMODELLED
 
     def __init__(self, battery_settings: BatterySettings) -> None:
         """Initialise the SolaX controller."""
@@ -228,7 +233,7 @@ class SolaxController(InverterController):
           → disable VPP, handing the period to the inverter's own self-use
           load-following so it covers the actual deficit rather than the
           forecast one. The rate is discarded, not scaled -- which is what
-          lets `load_support_delivers_exact_cover` be True.
+          lets `load_support_delivery` be `ceiling`.
         - ``grid_charge=False, discharge_rate>0`` → discharge at the given rate.
 
         ``block_passive_charging`` is accepted but currently unused: unlike

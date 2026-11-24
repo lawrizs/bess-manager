@@ -208,6 +208,20 @@ class TestGetSettings:
             resp = _client.get("/api/settings")
         assert resp.json()["influxdbConfigPresent"] is False
 
+    def test_realtime_fuse_guard_supported_reflects_the_system(
+        self, mock_controller: MagicMock
+    ) -> None:
+        """#901: the Fuse Protection card warns that only planning-level
+        protection applies when the active platform has no real-time guard —
+        it must read the backend's capability, not infer it client-side."""
+        mock_controller.system.realtime_fuse_guard_supported = False
+        resp = _client.get("/api/settings")
+        assert resp.json()["realtimeFuseGuardSupported"] is False
+
+        mock_controller.system.realtime_fuse_guard_supported = True
+        resp = _client.get("/api/settings")
+        assert resp.json()["realtimeFuseGuardSupported"] is True
+
 
 # ===========================================================================
 # PATCH /api/settings — routing and conversion
@@ -1018,3 +1032,131 @@ class TestDemoMode:
         _client.patch("/api/settings", json={"demoMode": {"enabled": True}})
         _client.patch("/api/settings", json={"demoMode": {"enabled": False}})
         inv.apply_period.assert_not_called()
+
+
+class TestPatchSettingsGridTariff:
+    """electricity_price.grid_tariff_* (#861) is validated before it is
+    persisted, so a malformed profile never reaches the store or the
+    optimizer's buy prices."""
+
+    def test_valid_profiles_persisted_and_applied_live(
+        self, mock_controller: MagicMock
+    ) -> None:
+        winter = [0.45] * 24
+        summer = [0.23] * 24
+        resp = _client.patch(
+            "/api/settings",
+            json={
+                "electricityPrice": {
+                    "gridTariffHourly": winter,
+                    "gridTariffSummerHourly": summer,
+                }
+            },
+        )
+        assert resp.status_code == 200
+        stored = mock_controller.settings_store.data["electricity_price"]
+        assert stored["grid_tariff_hourly"] == winter
+        assert stored["grid_tariff_summer_hourly"] == summer
+        price_calls = [
+            c
+            for c in mock_controller.system.update_settings.call_args_list
+            if "price" in c[0][0]
+        ]
+        assert price_calls[0][0][0]["price"]["grid_tariff_hourly"] == winter
+
+    @pytest.mark.parametrize(
+        "update",
+        [
+            pytest.param({"gridTariffHourly": [0.4] * 23}, id="short"),
+            pytest.param({"gridTariffHourly": [0.4] * 96}, id="quarterly"),
+            pytest.param(
+                {"gridTariffHourly": [], "gridTariffSummerHourly": [0.2] * 24},
+                id="summer-without-year-round",
+            ),
+        ],
+    )
+    def test_malformed_profile_rejected_and_not_persisted(
+        self, mock_controller: MagicMock, update: dict
+    ) -> None:
+        before = dict(mock_controller.settings_store.data.get("electricity_price", {}))
+        resp = _client.patch("/api/settings", json={"electricityPrice": update})
+        assert resp.status_code == 422
+        assert "grid_tariff" in resp.json()["detail"]
+        assert (
+            mock_controller.settings_store.data.get("electricity_price", {}) == before
+        )
+
+
+# ===========================================================================
+# PATCH /api/settings — model invariants checked before persisting (#917)
+# ===========================================================================
+
+
+class TestPatchSettingsModelInvariantsNotPersisted:
+    """A value the settings model rejects must be rejected with 422 BEFORE it
+    is written to bess_settings.json. Persisting first meant a rejected
+    safety_margin=0 survived on disk, and every restart then failed on the
+    same invariant -- the add-on could no longer start (#917)."""
+
+    @pytest.mark.parametrize(
+        ("field", "store_key"),
+        [
+            ("safetyMargin", "safety_margin"),
+            ("voltage", "voltage"),
+            ("maxFuseCurrent", "max_fuse_current"),
+        ],
+    )
+    def test_home_value_rejected_by_model_is_not_persisted(
+        self,
+        mock_controller: MagicMock,
+        wire_real_settings_models: Callable,
+        field: str,
+        store_key: str,
+    ) -> None:
+        _, home = wire_real_settings_models(mock_controller)
+        mock_controller.settings_store.data["sensors"]["shared"] = {
+            "current_l1": "sensor.current_l1",
+            "current_l2": "sensor.current_l2",
+            "current_l3": "sensor.current_l3",
+            "battery_charging_power_rate": "sensor.charge_rate",
+        }
+        before = deepcopy(mock_controller.settings_store.data["home"])
+        live_before = getattr(home, store_key)
+
+        response = _client.patch(
+            "/api/settings",
+            json={"home": {"powerMonitoringEnabled": True, field: 0}},
+        )
+
+        assert response.status_code == 422
+        assert store_key in response.json()["detail"]
+        assert mock_controller.settings_store.data["home"] == before
+        assert getattr(home, store_key) == live_before
+        assert home.power_monitoring_enabled is False
+
+    def test_battery_value_rejected_by_model_is_not_persisted(
+        self, mock_controller: MagicMock, wire_real_settings_models: Callable
+    ) -> None:
+        battery, _ = wire_real_settings_models(mock_controller)
+        before = deepcopy(mock_controller.settings_store.data["battery"])
+        live_before = battery.total_capacity
+
+        response = _client.patch(
+            "/api/settings", json={"battery": {"totalCapacity": 0}}
+        )
+
+        assert response.status_code == 422
+        assert "total_capacity" in response.json()["detail"]
+        assert mock_controller.settings_store.data["battery"] == before
+        assert battery.total_capacity == live_before
+
+    def test_valid_home_update_is_persisted_and_applied(
+        self, mock_controller: MagicMock, wire_real_settings_models: Callable
+    ) -> None:
+        _, home = wire_real_settings_models(mock_controller)
+
+        response = _client.patch("/api/settings", json={"home": {"safetyMargin": 0.9}})
+
+        assert response.status_code == 200
+        assert mock_controller.settings_store.data["home"]["safety_margin"] == 0.9
+        assert home.safety_margin == 0.9
